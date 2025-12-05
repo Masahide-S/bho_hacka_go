@@ -24,6 +24,8 @@ var rootCmd = &cobra.Command{
     fmt.Println(monitor.CheckNodejs())
     // Python(flask,jupyter..)監視を追加
     fmt.Println(monitor.CheckPython())
+    // Port番号監視を追加
+    fmt.Println(monitor.ListAllPorts())
 	},
 }
 
