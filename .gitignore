@@ -1,0 +1,30 @@
+# バイナリ
+devmon
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ビルド成果物
+dist/
+*.tar.gz
+*.zip
+
+# テスト
+*.test
+*.out
+coverage.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
