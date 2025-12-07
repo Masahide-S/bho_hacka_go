@@ -1,53 +1,61 @@
 package ui
 
 import (
-	"fmt"
-	"strings"
+	"os/exec"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
-)
-
-// Styles
-var (
-	titleStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#00FFFF")).
-		MarginBottom(1)
-
-	successStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#00FF00"))
-
-	errorStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF0000"))
-
-	infoStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFF00"))
-
-	timestampStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
-		Italic(true)
-
-	helpStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#666666")).
-		MarginTop(1)
 )
 
 // tickMsg is sent every second to trigger updates
 type tickMsg time.Time
 
+// MenuItem represents an item in the left menu
+type MenuItem struct {
+	Name     string
+	Type     string
+	Status   string
+	HasIssue bool
+}
+
 // Model holds the TUI state
 type Model struct {
 	lastUpdate time.Time
 	quitting   bool
+	width      int
+	height     int
+
+	// Menu navigation
+	menuItems    []MenuItem
+	selectedItem int
+
+	// AI Analysis
+	aiIssueCount int
+
+	// System Resources
+	systemResources monitor.SystemResources  // 🆕 追加
 }
 
 // InitialModel returns the initial model
 func InitialModel() Model {
 	return Model{
-		lastUpdate: time.Now(),
+		lastUpdate:   time.Now(),
+		selectedItem: 0,
+		menuItems: []MenuItem{
+			{Name: "AI分析", Type: "ai", Status: ""},
+			{Name: "────────────", Type: "separator", Status: ""},
+			{Name: "PostgreSQL", Type: "service", Status: "✗"},
+			{Name: "MySQL", Type: "service", Status: "✗"},        // 🆕 追加
+			{Name: "Redis", Type: "service", Status: "✗"},        // 🆕 追加
+			{Name: "Docker", Type: "service", Status: "✗"},
+			{Name: "Node.js", Type: "service", Status: "✗"},
+			{Name: "Python", Type: "service", Status: "✗"},
+			{Name: "────────────", Type: "separator", Status: ""},
+			{Name: "ポート一覧", Type: "info", Status: ""},
+		},
+		aiIssueCount:    0,
+		systemResources: monitor.GetSystemResources(),
 	}
 }
 
@@ -71,73 +79,109 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+
+		case "up", "k":
+			m.selectedItem--
+			if m.selectedItem >= 0 && m.menuItems[m.selectedItem].Type == "separator" {
+				m.selectedItem--
+			}
+			if m.selectedItem < 0 {
+				m.selectedItem = len(m.menuItems) - 1
+			}
+
+		case "down", "j":
+			m.selectedItem++
+			if m.selectedItem < len(m.menuItems) && m.menuItems[m.selectedItem].Type == "separator" {
+				m.selectedItem++
+			}
+			if m.selectedItem >= len(m.menuItems) {
+				m.selectedItem = 0
+			}
 		}
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 
 	case tickMsg:
 		m.lastUpdate = time.Time(msg)
+		m.systemResources = monitor.GetSystemResources()  // 🆕 毎秒更新
+		m = m.updateServiceStatus()
 		return m, tick()
 	}
 
 	return m, nil
 }
 
-// View renders the TUI
-func (m Model) View() string {
-	if m.quitting {
-		return "👋 監視を終了しました\n"
+// updateServiceStatus updates the status of services
+func (m Model) updateServiceStatus() Model {
+	for i, item := range m.menuItems {
+		if item.Type != "service" {
+			continue
+		}
+
+		// 各サービスの状態をチェック
+		switch item.Name {
+		case "PostgreSQL":
+			if isServiceRunning("postgres") {
+				m.menuItems[i].Status = "✓"
+			} else {
+				m.menuItems[i].Status = "✗"
+			}
+
+		case "MySQL":
+			if isServiceRunning("mysqld") {
+				m.menuItems[i].Status = "✓"
+			} else {
+				m.menuItems[i].Status = "✗"
+			}
+
+		case "Redis":
+			if isServiceRunning("redis-server") {
+				m.menuItems[i].Status = "✓"
+			} else {
+				m.menuItems[i].Status = "✗"
+			}
+
+		case "Docker":
+			if isServiceRunning("docker") {
+				m.menuItems[i].Status = "✓"
+			} else {
+				m.menuItems[i].Status = "✗"
+			}
+
+		case "Node.js":
+			if isServiceRunning("node") {
+				m.menuItems[i].Status = "✓"
+			} else {
+				m.menuItems[i].Status = "✗"
+			}
+
+		case "Python":
+			if isServiceRunning("python") {
+				m.menuItems[i].Status = "✓"
+			} else {
+				m.menuItems[i].Status = "✗"
+			}
+		}
 	}
 
-	var b strings.Builder
-
-	// Title
-	b.WriteString(titleStyle.Render("=== Local Development Monitor ==="))
-	b.WriteString("\n\n")
-
-	// Timestamp
-	timestamp := m.lastUpdate.Format("2006-01-02 15:04:05")
-	b.WriteString(timestampStyle.Render(fmt.Sprintf("最終更新: %s", timestamp)))
-	b.WriteString("\n\n")
-
-	// PostgreSQL Status
-	b.WriteString(formatSection("PostgreSQL", monitor.CheckPostgres()))
-	b.WriteString("\n")
-
-	// Docker Status
-	b.WriteString(formatSection("Docker", monitor.CheckDocker()))
-	b.WriteString("\n")
-
-	// Node.js Status
-	b.WriteString(formatSection("Node.js", monitor.CheckNodejs()))
-	b.WriteString("\n")
-
-	// Python Status
-	b.WriteString(formatSection("Python", monitor.CheckPython()))
-	b.WriteString("\n")
-
-	// Ports
-	b.WriteString(formatSection("使用中のポート", monitor.ListAllPorts()))
-	b.WriteString("\n")
-
-	// Help
-	b.WriteString(helpStyle.Render("q: 終了"))
-	b.WriteString("\n")
-
-	return b.String()
+	return m
 }
 
-// formatSection applies color based on status
-func formatSection(title, content string) string {
-	if strings.Contains(content, "✓") {
-		return successStyle.Render(content)
-	} else if strings.Contains(content, "✗") {
-		return errorStyle.Render(content)
-	}
-	return infoStyle.Render(content)
+// isServiceRunning checks if a service is running
+func isServiceRunning(processName string) bool {
+	cmd := exec.Command("pgrep", processName)
+	err := cmd.Run()
+	return err == nil
 }
 
 // Run starts the TUI
 func Run() error {
-	p := tea.NewProgram(InitialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(
+		InitialModel(),
+		tea.WithAltScreen(),
+	)
 	_, err := p.Run()
 	return err
 }
