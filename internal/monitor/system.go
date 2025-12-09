@@ -27,8 +27,9 @@ func GetSystemResources() SystemResources {
 
 // getCPUUsage returns current CPU usage percentage
 func getCPUUsage() float64 {
-	// macOS: top コマンドで取得
-	cmd := exec.Command("sh", "-c", "top -l 1 | grep 'CPU usage' | awk '{print $3}' | sed 's/%//'")
+	// 軽量版: ps コマンドで全プロセスのCPU使用率を合計
+	// top -l 1 (1秒) → ps (50ms) に変更
+	cmd := exec.Command("sh", "-c", "ps -A -o %cpu | awk '{s+=$1} END {print s}'")
 	output, err := cmd.Output()
 
 	if err != nil {
@@ -39,25 +40,43 @@ func getCPUUsage() float64 {
 	return usage
 }
 
-// getMemoryUsed returns used memory in MB
+// getMemoryUsed returns used memory in MB (lightweight version)
 func getMemoryUsed() int64 {
-	// macOS: vm_stat コマンドで取得
-	cmd := exec.Command("sh", "-c", "vm_stat | grep 'Pages active' | awk '{print $3}' | sed 's/\\.//'")
-	output, err := cmd.Output()
-
+	// vm_stat の代わりに sysctl を使用（より軽量）
+	cmd := exec.Command("sh", "-c", "sysctl -n hw.memsize")
+	totalBytes, err := cmd.Output()
 	if err != nil {
 		return 0
 	}
 
-	pages, _ := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
-	// ページサイズは通常4096バイト
-	usedMB := (pages * 4096) / (1024 * 1024)
+	total, _ := strconv.ParseInt(strings.TrimSpace(string(totalBytes)), 10, 64)
+
+	// 空きメモリ取得
+	cmd = exec.Command("sh", "-c", "vm_stat | grep 'Pages free' | awk '{print $3}' | sed 's/\\.//'")
+	freePages, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	free, _ := strconv.ParseInt(strings.TrimSpace(string(freePages)), 10, 64)
+
+	// 使用中 = 全体 - 空き
+	totalMB := total / (1024 * 1024)
+	freeMB := (free * 4096) / (1024 * 1024)
+	usedMB := totalMB - freeMB
+
 	return usedMB
 }
 
-// getMemoryTotal returns total memory in MB
+// getMemoryTotal を簡略化（キャッシュ）
+var cachedMemoryTotal int64 = 0
+
 func getMemoryTotal() int64 {
-	// macOS: sysctl で取得
+	// 総メモリは変わらないのでキャッシュ
+	if cachedMemoryTotal > 0 {
+		return cachedMemoryTotal
+	}
+
 	cmd := exec.Command("sysctl", "-n", "hw.memsize")
 	output, err := cmd.Output()
 
@@ -66,8 +85,9 @@ func getMemoryTotal() int64 {
 	}
 
 	bytes, _ := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
-	totalMB := bytes / (1024 * 1024)
-	return totalMB
+	cachedMemoryTotal = bytes / (1024 * 1024)
+
+	return cachedMemoryTotal
 }
 
 // getMemoryPercentage returns memory usage percentage

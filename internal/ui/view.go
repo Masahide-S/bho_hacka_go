@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
@@ -131,15 +132,24 @@ func (m Model) renderRightDetail(width, height int) string {
 	case "ai":
 		title = "環境分析結果"
 		content = m.renderAIAnalysis()
-		
-	case "service":
+
+	case "service", "info":
 		title = selectedItem.Name
-		content = m.renderServiceDetail(selectedItem.Name)
-		
-	case "info":
-		title = selectedItem.Name
-		content = m.renderInfoPanel(selectedItem.Name)
-		
+
+		// キャッシュから取得（即座に表示）
+		if cache, exists := m.serviceCache[selectedItem.Name]; exists {
+			content = cache.Data
+
+			// 更新中の表示
+			if cache.Updating {
+				ageSeconds := int(time.Since(cache.UpdatedAt).Seconds())
+				content += fmt.Sprintf("\n\n更新中... (最終更新: %d秒前)", ageSeconds)
+			}
+		} else {
+			// キャッシュがない場合
+			content = "データ取得中..."
+		}
+
 	default:
 		title = "選択してください"
 		content = "左のメニューから項目を選択してください"
@@ -218,15 +228,14 @@ func (m Model) renderInfoPanel(panelName string) string {
 	}
 }
 
-// renderSystemResources renders system resource info
+// renderSystemResources renders system resource info (detailed)
 func (m Model) renderSystemResources() string {
-	return `システムリソース
+	// キャッシュから取得（重い処理なので）
+	if cache, exists := m.serviceCache["システムリソース"]; exists {
+		return cache.Data
+	}
 
-CPU使用率: 15.2%
-メモリ: 8.2 GB / 16.0 GB (51%)
-
-プロセス数: 342
-稼働時間: 5日 12時間`
+	return "データ取得中..."
 }
 
 // createBox creates a box with title embedded in border
