@@ -19,7 +19,7 @@ func (m Model) View() string {
 		return "初期化中..."
 	}
 
-	return m.render2ColumnLayout()  // ← 関数名変更
+	return m.render2ColumnLayout()
 }
 
 // render2ColumnLayout renders the 2-column layout with menu
@@ -160,42 +160,37 @@ func (m Model) renderRightDetail(width, height int) string {
 
 // renderAIAnalysis renders AI analysis result
 func (m Model) renderAIAnalysis() string {
-	if m.aiIssueCount == 0 {
+	switch m.aiState {
+	case aiStateLoading:
 		return `AI Assistant
 
-✓ すべて正常です
+環境を分析中...
 
-監視状況:
-  ✓ 全サービス正常稼働
-  ✓ ポート衝突なし
-  ✓ リソース使用量: 正常範囲
+Ollamaが環境情報を読み取っています。
+しばらくお待ちください。`
 
-[a] 環境全体を分析`
+	case aiStateSuccess:
+		return fmt.Sprintf(`AI Analysis Result
+
+%s
+
+[a] 再分析`, m.aiResponse)
+
+	case aiStateError:
+		return fmt.Sprintf(`AI Assistant
+
+エラーが発生しました:
+%s
+
+[a] 再試行`, m.aiResponse)
+
+	default: // aiStateIdle
+		return `AI Assistant
+
+環境分析の準備ができています。
+
+[a] キーを押して環境全体を分析`
 	}
-
-	return `AI Assistant
-
-[!] 検知された問題 (2件):
-
-1. Docker メモリ使用率
-   512MB / 7.66GB (6.7%)
-   
-   原因: 長時間稼働による蓄積
-   
-   推奨対応:
-   - docker restart vit-viz-app
-   - メモリ制限の設定を確認
-
-2. Node.js 長時間稼働
-   稼働: 37日23時間
-   
-   推奨対応:
-   - 定期的な再起動
-   - pm2 restart all
-
-全体の健全性: 70%
-
-[a] 再分析`
 }
 
 // renderServiceDetail renders service detail
@@ -349,3 +344,5 @@ func (m Model) wrapWithHeaderFooter(content string) string {
 	// 全体を外枠で囲む
 	return OuterBorderStyle.Render(innerContent)
 }
+
+

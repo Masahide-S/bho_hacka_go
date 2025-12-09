@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
 	"github.com/Masahide-S/bho_hacka_go/internal/logger"
+	"github.com/Masahide-S/bho_hacka_go/internal/ai"
 )
 
 
@@ -56,7 +57,30 @@ type Model struct {
 	// Cache
 	serviceCache map[string]*ServiceCache
 	tickCount    int
+
+	// AI関連フィールド
+	aiService  *ai.Service
+	aiState    int
+	aiResponse string
 }
+
+
+
+
+// AIの状態を表す定数
+const (
+	aiStateIdle = iota
+	aiStateLoading
+	aiStateSuccess
+	aiStateError
+)
+
+// aiAnalysisMsg はAI分析結果を運ぶメッセージ
+type aiAnalysisMsg struct {
+	Result string
+	Err    error
+}
+
 
 // InitialModel returns the initial model
 func InitialModel() Model {
@@ -80,6 +104,9 @@ func InitialModel() Model {
 		systemResources: monitor.GetSystemResources(),
 		serviceCache:    make(map[string]*ServiceCache),
 		tickCount:       0,
+
+		aiService: ai.NewService(),
+		aiState:   aiStateIdle,
 	}
 }
 
@@ -133,6 +160,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// 選択変更時、キャッシュが古ければ再取得
 			return m, m.fetchSelectedServiceCmd()
+
+		// [a] キーでAI分析開始（AI分析メニュー選択時のみ）
+		case "a":
+			selectedItem := m.menuItems[m.selectedItem]
+			if selectedItem.Type == "ai" && m.aiState != aiStateLoading {
+				m.aiState = aiStateLoading
+				m.aiResponse = ""
+				return m, m.runAIAnalysisCmd()
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -192,9 +228,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Updating:  false,
 		}
 		return m, nil
+
+		// AI分析結果の受信
+	case aiAnalysisMsg:
+		if msg.Err != nil {
+			m.aiState = aiStateError
+			m.aiResponse = "エラーが発生しました:\n" + msg.Err.Error()
+		} else {
+			m.aiState = aiStateSuccess
+			m.aiResponse = msg.Result
+		}
+		return m, nil
 	}
 
 	return m, nil
+}
+
+// runAIAnalysisCmd は非同期でAI分析を実行
+func (m Model) runAIAnalysisCmd() tea.Cmd {
+	return func() tea.Msg {
+		// コンテキスト構築（RAG）
+		prompt := m.aiService.BuildSystemContext()
+		
+		// 推論実行
+		result, err := m.aiService.Analyze(prompt)
+		
+		return aiAnalysisMsg{Result: result, Err: err}
+	}
 }
 
 // fetchSelectedServiceCmd fetches the currently selected service data
