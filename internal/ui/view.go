@@ -170,11 +170,44 @@ Ollamaが環境情報を読み取っています。
 しばらくお待ちください。`
 
 	case aiStateSuccess:
-		return fmt.Sprintf(`AI Analysis Result
+		baseContent := fmt.Sprintf(`AI Analysis Result
 
-%s
+%s`, m.aiResponse)
 
-[a] 再分析`, m.aiResponse)
+		// コマンド実行待ちの場合のプロンプト表示
+		if m.aiPendingCmd != "" {
+			prompt := fmt.Sprintf(`
+
+────────────────────────────────────────
+🤖 AIがアクションを提案しています:
+
+  $ %s
+
+[Enter] 実行する    [Esc] キャンセル
+────────────────────────────────────────`, m.aiPendingCmd)
+			baseContent += WarningStyle.Render(prompt)
+		}
+
+		// 実行結果の表示
+		if m.aiCmdResult != "" {
+			resultStyle := InfoStyle
+			if len(m.aiCmdResult) > 0 && m.aiCmdResult[0] == 226 { // '✗' のUTF-8先頭バイト
+				resultStyle = ErrorStyle
+			} else if len(m.aiCmdResult) > 0 && m.aiCmdResult[0] == 226 { // '✓' のUTF-8先頭バイト
+				resultStyle = SuccessStyle
+			}
+			// 文字列で判定
+			if strings.HasPrefix(m.aiCmdResult, "✗") {
+				resultStyle = ErrorStyle
+			} else if strings.HasPrefix(m.aiCmdResult, "✓") {
+				resultStyle = SuccessStyle
+			}
+
+			baseContent += "\n\n" + resultStyle.Render(m.aiCmdResult)
+		}
+
+		baseContent += "\n\n[a] 再分析"
+		return baseContent
 
 	case aiStateError:
 		return fmt.Sprintf(`AI Assistant
