@@ -35,6 +35,9 @@ func executeDockerContainerCommand(containerID, action string) CommandResult {
 	case "rebuild":
 		// 個別コンテナのリビルドはdocker-compose経由で実行
 		return executeContainerRebuild(containerID)
+	case "remove":
+		// コンテナを削除（-vオプションで関連ボリュームも削除）
+		cmd = exec.Command("docker", "rm", "-f", containerID)
 	default:
 		return CommandResult{Success: false, Message: "不明なアクション"}
 	}
@@ -221,7 +224,88 @@ func getActionJapanese(action string) string {
 		return "再起動"
 	case "rebuild":
 		return "リビルド"
+	case "remove":
+		return "削除"
 	default:
 		return action
+	}
+}
+
+// ExecutePostgresCommand executes a PostgreSQL command
+func ExecutePostgresCommand(databaseName, action string) CommandResult {
+	var cmd *exec.Cmd
+
+	switch action {
+	case "drop":
+		// データベースを削除
+		cmd = exec.Command("dropdb", databaseName)
+	case "vacuum":
+		// VACUUM実行
+		cmd = exec.Command("psql", "-d", databaseName, "-c", "VACUUM;")
+	case "analyze":
+		// ANALYZE実行
+		cmd = exec.Command("psql", "-d", databaseName, "-c", "ANALYZE;")
+	default:
+		return CommandResult{Success: false, Message: "不明なアクション"}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("データベース操作失敗: %s", string(output)),
+		}
+	}
+
+	actionJP := ""
+	switch action {
+	case "drop":
+		actionJP = "削除"
+	case "vacuum":
+		actionJP = "VACUUM実行"
+	case "analyze":
+		actionJP = "ANALYZE実行"
+	}
+
+	return CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("データベース %s を%sしました", databaseName, actionJP),
+	}
+}
+
+// ExecuteNodeCommand executes a Node.js process command
+func ExecuteNodeCommand(pid, action string) CommandResult {
+	var cmd *exec.Cmd
+
+	switch action {
+	case "kill":
+		// プロセスを停止
+		cmd = exec.Command("kill", pid)
+	case "force_kill":
+		// プロセスを強制停止
+		cmd = exec.Command("kill", "-9", pid)
+	default:
+		return CommandResult{Success: false, Message: "不明なアクション"}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("プロセス操作失敗: %s", string(output)),
+		}
+	}
+
+	actionJP := ""
+	switch action {
+	case "kill":
+		actionJP = "停止"
+	case "force_kill":
+		actionJP = "強制停止"
+	}
+
+	return CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Node.jsプロセス (PID: %s) を%sしました", pid, actionJP),
 	}
 }

@@ -79,10 +79,12 @@ type Model struct {
 	systemResources monitor.SystemResources
 
 	// Cache
-	serviceCache        map[string]*ServiceCache
-	containerStatsCache map[string]*ContainerStatsCache // コンテナID -> 統計キャッシュ
-	cachedContainers    []monitor.DockerContainer       // コンテナリストのキャッシュ
-	tickCount           int
+	serviceCache            map[string]*ServiceCache
+	containerStatsCache     map[string]*ContainerStatsCache // コンテナID -> 統計キャッシュ
+	cachedContainers        []monitor.DockerContainer       // コンテナリストのキャッシュ
+	cachedPostgresDatabases []monitor.PostgresDatabase      // PostgreSQLデータベースのキャッシュ
+	cachedNodeProcesses     []monitor.NodeProcess           // Node.jsプロセスのキャッシュ
+	tickCount               int
 
 	// Right panel navigation
 	focusedPanel     string            // "left" or "right"
@@ -117,11 +119,13 @@ func InitialModel() Model {
 			{Name: "システムリソース", Type: "info", Status: ""},
 		},
 		aiIssueCount:        0,
-		systemResources:     monitor.GetSystemResources(),
-		serviceCache:        make(map[string]*ServiceCache),
-		containerStatsCache: make(map[string]*ContainerStatsCache),
-		cachedContainers:    []monitor.DockerContainer{},
-		tickCount:           0,
+		systemResources:         monitor.GetSystemResources(),
+		serviceCache:            make(map[string]*ServiceCache),
+		containerStatsCache:     make(map[string]*ContainerStatsCache),
+		cachedContainers:        []monitor.DockerContainer{},
+		cachedPostgresDatabases: []monitor.PostgresDatabase{},
+		cachedNodeProcesses:     []monitor.NodeProcess{},
+		tickCount:               0,
 		focusedPanel:        "left",
 		rightPanelCursor:    0,
 		rightPanelItems:     []RightPanelItem{},
@@ -278,6 +282,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case "d":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "Docker" {
+					return m.handleContainerRemove()
+				} else if selectedItem.Name == "PostgreSQL" {
+					return m.handleDatabaseDrop()
+				}
+			}
+
+		case "x":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "Node.js" {
+					return m.handleProcessKill()
+				}
+			}
+
+		case "X":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "Node.js" {
+					return m.handleProcessForceKill()
+				}
+			}
+
+		case "v":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "PostgreSQL" {
+					return m.handleDatabaseVacuum()
+				}
+			}
+
+		case "a":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "PostgreSQL" {
+					return m.handleDatabaseAnalyze()
+				}
+			}
+
 		// スクロール（右パネルで詳細表示時のみ）
 		case "ctrl+d":
 			if m.focusedPanel == "right" {
@@ -379,16 +440,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// コマンド実行結果を保存
 		m.lastCommandResult = msg.message
 
-		// コンテナリストを再取得して表示を更新
-		m = m.updateRightPanelItems()
+		// 選択中のサービスに応じて更新
+		selectedItem := m.menuItems[m.selectedItem]
+		var updateCmds []tea.Cmd
 
-		// 5秒後にメッセージをクリア
-		return m, tea.Batch(
+		if selectedItem.Name == "Docker" {
+			// Dockerの場合: コンテナ統計とリストを更新
+			updateCmds = append(updateCmds, m.fetchContainerStatsCmd())
+		} else if selectedItem.Name == "PostgreSQL" {
+			// PostgreSQLの場合: 右パネルを更新
+			m = m.updateRightPanelItems()
+		} else if selectedItem.Name == "Node.js" {
+			// Node.jsの場合: 右パネルを更新
+			m = m.updateRightPanelItems()
+		}
+
+		updateCmds = append(updateCmds,
 			m.fetchSelectedServiceCmd(),
 			tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
 				return clearCommandResultMsg{}
 			}),
 		)
+
+		return m, tea.Batch(updateCmds...)
 
 	case clearCommandResultMsg:
 		m.lastCommandResult = ""
@@ -401,6 +475,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// コンテナリストのキャッシュも更新
 		m.cachedContainers = msg.ContainersList
+
+		// Dockerパネルが選択されている場合のみ右パネルを更新
+		selectedItem := m.menuItems[m.selectedItem]
+		if selectedItem.Name == "Docker" {
+			m = m.updateRightPanelItems()
+		}
+
 		return m, nil
 	}
 
@@ -608,6 +689,18 @@ func isServiceRunning(processName string) bool {
 func (m Model) updateRightPanelItems() Model {
 	selectedItem := m.menuItems[m.selectedItem]
 
+	// 現在選択中のコンテナIDを保存
+	var currentSelectedContainerID string
+	var currentSelectedProjectName string
+	if m.rightPanelCursor < len(m.rightPanelItems) {
+		currentItem := m.rightPanelItems[m.rightPanelCursor]
+		if currentItem.Type == "container" {
+			currentSelectedContainerID = currentItem.ContainerID
+		} else if currentItem.Type == "project" {
+			currentSelectedProjectName = currentItem.Name
+		}
+	}
+
 	// 既存のトグル状態を保存
 	expandedState := make(map[string]bool)
 	for _, item := range m.rightPanelItems {
@@ -671,9 +764,56 @@ func (m Model) updateRightPanelItems() Model {
 			})
 		}
 
+	case "PostgreSQL":
+		// PostgreSQLデータベース一覧を取得
+		databases := monitor.GetPostgresDatabases()
+		m.cachedPostgresDatabases = databases
+
+		// データベースを追加
+		for _, db := range databases {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type: "database",
+				Name: db.Name,
+			})
+		}
+
+	case "Node.js":
+		// Node.jsプロセス一覧を取得
+		processes := monitor.GetNodeProcesses()
+		m.cachedNodeProcesses = processes
+
+		// プロセスを追加
+		for _, proc := range processes {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type: "process",
+				Name: proc.PID,
+			})
+		}
+
 	default:
 		// その他は選択不可
 		m.rightPanelItems = []RightPanelItem{}
+	}
+
+	// カーソル位置を復元
+	if currentSelectedContainerID != "" || currentSelectedProjectName != "" {
+		for i, item := range m.rightPanelItems {
+			if item.Type == "container" && item.ContainerID == currentSelectedContainerID {
+				m.rightPanelCursor = i
+				break
+			} else if item.Type == "project" && item.Name == currentSelectedProjectName {
+				m.rightPanelCursor = i
+				break
+			}
+		}
+	}
+
+	// カーソル位置が範囲外の場合は調整
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		m.rightPanelCursor = len(m.rightPanelItems) - 1
+	}
+	if m.rightPanelCursor < 0 {
+		m.rightPanelCursor = 0
 	}
 
 	return m
@@ -705,26 +845,6 @@ func (m Model) isItemVisible(index int) bool {
 	return true
 }
 
-// handleProjectToggle toggles project expand/collapse
-func (m Model) handleProjectToggle() (Model, tea.Cmd) {
-	if m.rightPanelCursor >= len(m.rightPanelItems) {
-		return m, nil
-	}
-
-	selectedItem := m.rightPanelItems[m.rightPanelCursor]
-
-	// プロジェクトの場合のみトグル
-	if selectedItem.Type == "project" {
-		// IsExpandedを反転
-		m.rightPanelItems[m.rightPanelCursor].IsExpanded = !m.rightPanelItems[m.rightPanelCursor].IsExpanded
-
-		// 表示を再構築
-		m = m.updateRightPanelItems()
-	}
-
-	return m, nil
-}
-
 // isSelectedContainerCompose checks if the selected container is a compose container
 func (m Model) isSelectedContainerCompose() bool {
 	if m.rightPanelCursor >= len(m.rightPanelItems) {
@@ -744,96 +864,6 @@ func (m Model) isSelectedContainerCompose() bool {
 	}
 
 	return false
-}
-
-// handleContainerToggle handles start/stop toggle
-func (m Model) handleContainerToggle() (Model, tea.Cmd) {
-	if m.rightPanelCursor >= len(m.rightPanelItems) {
-		return m, nil
-	}
-
-	selectedItem := m.rightPanelItems[m.rightPanelCursor]
-
-	if selectedItem.Type == "project" {
-		// プロジェクト全体の操作
-		m.showConfirmDialog = true
-		m.confirmAction = "toggle_project"
-		m.confirmTarget = selectedItem.ProjectName
-		m.confirmType = "project"
-	} else {
-		// 個別コンテナの操作
-		container := m.getSelectedContainer()
-		if container == nil {
-			return m, nil
-		}
-
-		action := "start"
-		if container.Status == "running" {
-			action = "stop"
-		}
-
-		m.showConfirmDialog = true
-		m.confirmAction = action
-		m.confirmTarget = container.ID
-		m.confirmType = "container"
-	}
-
-	return m, nil
-}
-
-// handleContainerRestart handles container restart
-func (m Model) handleContainerRestart() (Model, tea.Cmd) {
-	if m.rightPanelCursor >= len(m.rightPanelItems) {
-		return m, nil
-	}
-
-	selectedItem := m.rightPanelItems[m.rightPanelCursor]
-
-	if selectedItem.Type == "project" {
-		// プロジェクト全体の再起動
-		m.showConfirmDialog = true
-		m.confirmAction = "restart_project"
-		m.confirmTarget = selectedItem.ProjectName
-		m.confirmType = "project"
-	} else {
-		// 個別コンテナの再起動
-		container := m.getSelectedContainer()
-		if container == nil {
-			return m, nil
-		}
-
-		m.showConfirmDialog = true
-		m.confirmAction = "restart"
-		m.confirmTarget = container.ID
-		m.confirmType = "container"
-	}
-
-	return m, nil
-}
-
-// handleContainerRebuild handles container rebuild (Compose only)
-func (m Model) handleContainerRebuild() (Model, tea.Cmd) {
-	if m.rightPanelCursor >= len(m.rightPanelItems) {
-		return m, nil
-	}
-
-	selectedItem := m.rightPanelItems[m.rightPanelCursor]
-
-	if selectedItem.Type == "project" {
-		// プロジェクト全体のリビルド
-		m.showConfirmDialog = true
-		m.confirmAction = "rebuild_project"
-		m.confirmTarget = selectedItem.ProjectName
-		m.confirmType = "project"
-	} else if selectedItem.ProjectName != "" {
-		// Composeコンテナのリビルド
-		m.showConfirmDialog = true
-		m.confirmAction = "rebuild"
-		m.confirmTarget = selectedItem.ContainerID
-		m.confirmType = "container"
-	}
-
-	return m, nil
 }
 
 // getSelectedContainer returns the currently selected container
@@ -860,12 +890,67 @@ func (m Model) getSelectedContainer() *monitor.DockerContainer {
 	return nil
 }
 
+// getSelectedDatabase returns the currently selected database
+func (m Model) getSelectedDatabase() *monitor.PostgresDatabase {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// データベース以外はnil
+	if selectedItem.Type != "database" {
+		return nil
+	}
+
+	// データベース名から検索
+	for i := range m.cachedPostgresDatabases {
+		if m.cachedPostgresDatabases[i].Name == selectedItem.Name {
+			return &m.cachedPostgresDatabases[i]
+		}
+	}
+
+	return nil
+}
+
+// getSelectedNodeProcess returns the currently selected Node.js process
+func (m Model) getSelectedNodeProcess() *monitor.NodeProcess {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// プロセス以外はnil
+	if selectedItem.Type != "process" {
+		return nil
+	}
+
+	// PIDから検索
+	for i := range m.cachedNodeProcesses {
+		if m.cachedNodeProcesses[i].PID == selectedItem.Name {
+			return &m.cachedNodeProcesses[i]
+		}
+	}
+
+	return nil
+}
+
 // executeCommand executes the confirmed command
 func (m Model) executeCommand() (Model, tea.Cmd) {
+	// アクションとターゲットを保存
+	target := m.confirmTarget
+	action := m.confirmAction
+	targetType := m.confirmType
+
+	// ダイアログを閉じる
 	m.showConfirmDialog = false
+	m.confirmAction = ""
+	m.confirmTarget = ""
+	m.confirmType = ""
 
 	// コマンドを非同期で実行
-	return m, executeCommandCmd(m.confirmTarget, m.confirmAction, m.confirmType)
+	return m, executeCommandCmd(target, action, targetType)
 }
 
 // executeCommandMsg is sent when command execution completes
@@ -877,7 +962,16 @@ type executeCommandMsg struct {
 // executeCommandCmd executes a command asynchronously
 func executeCommandCmd(target, action, targetType string) tea.Cmd {
 	return func() tea.Msg {
-		result := monitor.ExecuteDockerCommand(target, action, targetType)
+		var result monitor.CommandResult
+
+		if targetType == "database" {
+			result = monitor.ExecutePostgresCommand(target, action)
+		} else if targetType == "process" {
+			result = monitor.ExecuteNodeCommand(target, action)
+		} else {
+			result = monitor.ExecuteDockerCommand(target, action, targetType)
+		}
+
 		return executeCommandMsg{
 			success: result.Success,
 			message: result.Message,

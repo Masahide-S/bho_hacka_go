@@ -7,7 +7,7 @@ var (
 	bgColor        = lipgloss.Color("#1a1b26")
 	fgColor        = lipgloss.Color("#c0caf5")
 	borderColor    = lipgloss.Color("#7aa2f7") // ← 明るく変更（青系）
-	accentColor    = lipgloss.Color("#ff9e64") // ← オレンジに変更
+	accentColor    = lipgloss.Color("#ff9e64") // ← オレンジ（枠線用）
 	successColor   = lipgloss.Color("#9ece6a")
 	errorColor     = lipgloss.Color("#f7768e")
 	warningColor   = lipgloss.Color("#e0af68")
@@ -72,7 +72,7 @@ var (
 
 	// ハイライト（選択中の項目）
 	HighlightStyle = lipgloss.NewStyle().
-    	Foreground(accentColor).
+    	Foreground(borderColor).  // 青系の色
     	Bold(true).
     	Background(lipgloss.Color("#283457"))  // 薄い青背景
 )
