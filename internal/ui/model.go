@@ -21,6 +21,15 @@ type serviceDataMsg struct {
 	UpdatedAt   time.Time
 }
 
+// clearCommandResultMsg is sent to clear command result message
+type clearCommandResultMsg struct{}
+
+// containerStatsMsg is sent when container stats are fetched
+type containerStatsMsg struct {
+	Containers     map[string]*ContainerStatsCache // コンテナID -> キャッシュ
+	ContainersList []monitor.DockerContainer       // コンテナリスト
+}
+
 // MenuItem represents an item in the left menu
 type MenuItem struct {
 	Name     string
@@ -29,11 +38,27 @@ type MenuItem struct {
 	HasIssue bool
 }
 
+// RightPanelItem represents an item in the right panel
+type RightPanelItem struct {
+	Type        string // "project" or "container"
+	Name        string
+	ProjectName string // プロジェクト名（コンテナの場合）
+	ContainerID string // コンテナの場合のID
+	IsExpanded  bool   // プロジェクトが展開されているか
+}
+
 // ServiceCache holds cached service data
 type ServiceCache struct {
 	Data      string
 	UpdatedAt time.Time
 	Updating  bool
+}
+
+// ContainerStatsCache holds cached container stats
+type ContainerStatsCache struct {
+	Stats     monitor.DockerStats
+	ImageSize string
+	UpdatedAt time.Time
 }
 
 // Model holds the TUI state
@@ -54,13 +79,23 @@ type Model struct {
 	systemResources monitor.SystemResources
 
 	// Cache
-	serviceCache map[string]*ServiceCache
-	tickCount    int
+	serviceCache        map[string]*ServiceCache
+	containerStatsCache map[string]*ContainerStatsCache // コンテナID -> 統計キャッシュ
+	cachedContainers    []monitor.DockerContainer       // コンテナリストのキャッシュ
+	tickCount           int
 
 	// Right panel navigation
-	focusedPanel     string   // "left" or "right"
-	rightPanelCursor int      // 右パネルのカーソル位置
-	rightPanelItems  []string // 右パネルの選択可能な項目
+	focusedPanel     string            // "left" or "right"
+	rightPanelCursor int               // 右パネルのカーソル位置
+	rightPanelItems  []RightPanelItem  // 右パネルの選択可能な項目
+	detailScroll     int               // 詳細情報のスクロール位置
+
+	// Command execution
+	showConfirmDialog bool
+	confirmAction     string
+	confirmTarget     string // コンテナIDまたはプロジェクト名
+	confirmType       string // "container" or "project"
+	lastCommandResult string // 最後のコマンド実行結果
 }
 
 // InitialModel returns the initial model
@@ -81,13 +116,21 @@ func InitialModel() Model {
 			{Name: "ポート一覧", Type: "info", Status: ""},
 			{Name: "システムリソース", Type: "info", Status: ""},
 		},
-		aiIssueCount:    0,
-		systemResources: monitor.GetSystemResources(),
-		serviceCache:    make(map[string]*ServiceCache),
-		tickCount:       0,
-		focusedPanel:    "left",
-		rightPanelCursor: 0,
-		rightPanelItems: []string{},
+		aiIssueCount:        0,
+		systemResources:     monitor.GetSystemResources(),
+		serviceCache:        make(map[string]*ServiceCache),
+		containerStatsCache: make(map[string]*ContainerStatsCache),
+		cachedContainers:    []monitor.DockerContainer{},
+		tickCount:           0,
+		focusedPanel:        "left",
+		rightPanelCursor:    0,
+		rightPanelItems:     []RightPanelItem{},
+		detailScroll:        0,
+		showConfirmDialog: false,
+		confirmAction:     "",
+		confirmTarget:     "",
+		confirmType:       "",
+		lastCommandResult: "",
 	}
 }
 
@@ -100,6 +143,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tick(),
 		m.fetchAllServicesCmd(),
+		m.fetchContainerStatsCmd(),
 	)
 }
 
@@ -133,6 +177,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusedPanel = "right"
 				m.rightPanelCursor = 0
 				m = m.updateRightPanelItems()
+
+				// 最初の表示可能なアイテムにカーソルを移動
+				for m.rightPanelCursor < len(m.rightPanelItems) && !m.isItemVisible(m.rightPanelCursor) {
+					m.rightPanelCursor++
+				}
 			}
 			return m, nil
 
@@ -148,9 +197,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.fetchSelectedServiceCmd()
 			} else {
-				// 右パネルのカーソル移動
+				// 右パネルのカーソル移動（表示されていないアイテムをスキップ）
 				if m.rightPanelCursor > 0 {
 					m.rightPanelCursor--
+					// 展開されていないコンテナをスキップ
+					for m.rightPanelCursor >= 0 && !m.isItemVisible(m.rightPanelCursor) {
+						m.rightPanelCursor--
+					}
+					if m.rightPanelCursor < 0 {
+						m.rightPanelCursor = 0
+					}
+					// スクロール位置をリセット
+					m.detailScroll = 0
 				}
 				return m, nil
 			}
@@ -167,10 +225,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.fetchSelectedServiceCmd()
 			} else {
-				// 右パネルのカーソル移動
+				// 右パネルのカーソル移動（表示されていないアイテムをスキップ）
 				if m.rightPanelCursor < len(m.rightPanelItems)-1 {
 					m.rightPanelCursor++
+					// 展開されていないコンテナをスキップ
+					for m.rightPanelCursor < len(m.rightPanelItems) && !m.isItemVisible(m.rightPanelCursor) {
+						m.rightPanelCursor++
+					}
+					if m.rightPanelCursor >= len(m.rightPanelItems) {
+						m.rightPanelCursor = len(m.rightPanelItems) - 1
+					}
+					// スクロール位置をリセット
+					m.detailScroll = 0
 				}
+				return m, nil
+			}
+
+		// スペースキー: プロジェクトのトグル開閉
+		case " ":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				return m.handleProjectToggle()
+			}
+
+		// コマンド実行キー（右パネルでコンテナ選択時のみ）
+		case "s":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				return m.handleContainerToggle()
+			}
+
+		case "r":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				return m.handleContainerRestart()
+			}
+
+		case "b":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				// Composeコンテナの場合のみ
+				if m.isSelectedContainerCompose() {
+					return m.handleContainerRebuild()
+				}
+			}
+
+		// スクロール（右パネルで詳細表示時のみ）
+		case "ctrl+d":
+			if m.focusedPanel == "right" {
+				m.detailScroll += 5
+				return m, nil
+			}
+
+		case "ctrl+u":
+			if m.focusedPanel == "right" {
+				m.detailScroll -= 5
+				if m.detailScroll < 0 {
+					m.detailScroll = 0
+				}
+				return m, nil
+			}
+
+		// 確認ダイアログの応答
+		case "y", "Y":
+			if m.showConfirmDialog {
+				return m.executeCommand()
+			}
+
+		case "n", "N", "esc":
+			if m.showConfirmDialog {
+				m.showConfirmDialog = false
+				m.confirmAction = ""
+				m.confirmTarget = ""
 				return m, nil
 			}
 		}
@@ -209,6 +343,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// 5秒ごと: Docker統計のキャッシュ更新
+		if m.tickCount%5 == 0 {
+			selectedItem := m.menuItems[m.selectedItem]
+			if selectedItem.Name == "Docker" {
+				cmds = append(cmds, m.fetchContainerStatsCmd())
+			}
+		}
+
 		// 10秒ごと: 選択されていないサービスをバックグラウンド更新
 		if m.tickCount%10 == 0 {
 			cmds = append(cmds, m.fetchNonSelectedServicesCmd())
@@ -231,6 +373,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			UpdatedAt: msg.UpdatedAt,
 			Updating:  false,
 		}
+		return m, nil
+
+	case executeCommandMsg:
+		// コマンド実行結果を保存
+		m.lastCommandResult = msg.message
+
+		// コンテナリストを再取得して表示を更新
+		m = m.updateRightPanelItems()
+
+		// 5秒後にメッセージをクリア
+		return m, tea.Batch(
+			m.fetchSelectedServiceCmd(),
+			tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+				return clearCommandResultMsg{}
+			}),
+		)
+
+	case clearCommandResultMsg:
+		m.lastCommandResult = ""
+		return m, nil
+
+	case containerStatsMsg:
+		// コンテナ統計キャッシュを一括更新
+		for containerID, cache := range msg.Containers {
+			m.containerStatsCache[containerID] = cache
+		}
+		// コンテナリストのキャッシュも更新
+		m.cachedContainers = msg.ContainersList
 		return m, nil
 	}
 
@@ -437,22 +607,329 @@ func isServiceRunning(processName string) bool {
 // updateRightPanelItems updates the right panel items based on selected service
 func (m Model) updateRightPanelItems() Model {
 	selectedItem := m.menuItems[m.selectedItem]
-	m.rightPanelItems = []string{}
+
+	// 既存のトグル状態を保存
+	expandedState := make(map[string]bool)
+	for _, item := range m.rightPanelItems {
+		if item.Type == "project" {
+			expandedState[item.Name] = item.IsExpanded
+		}
+	}
+
+	m.rightPanelItems = []RightPanelItem{}
 
 	switch selectedItem.Name {
 	case "Docker":
 		// Dockerコンテナ一覧を取得
 		containers := monitor.GetDockerContainers()
+
+		// プロジェクトごとにグループ化
+		projects := make(map[string][]monitor.DockerContainer)
+		var standaloneContainers []monitor.DockerContainer
+
 		for _, c := range containers {
-			m.rightPanelItems = append(m.rightPanelItems, c.Name)
+			if c.ComposeProject != "" {
+				projects[c.ComposeProject] = append(projects[c.ComposeProject], c)
+			} else {
+				standaloneContainers = append(standaloneContainers, c)
+			}
+		}
+
+		// プロジェクトを追加
+		for projectName, containers := range projects {
+			// 既存の展開状態を取得、なければデフォルトでfalse（閉じる）
+			isExpanded, exists := expandedState[projectName]
+			if !exists {
+				isExpanded = false
+			}
+
+			// プロジェクト自体を追加
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type:        "project",
+				Name:        projectName,
+				ProjectName: projectName,
+				IsExpanded:  isExpanded,
+			})
+
+			// プロジェクト内のコンテナを追加
+			for _, c := range containers {
+				m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+					Type:        "container",
+					Name:        c.Name,
+					ProjectName: c.ComposeProject,
+					ContainerID: c.ID,
+				})
+			}
+		}
+
+		// 単体コンテナを追加
+		for _, c := range standaloneContainers {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type:        "container",
+				Name:        c.Name,
+				ContainerID: c.ID,
+			})
 		}
 
 	default:
 		// その他は選択不可
-		m.rightPanelItems = []string{}
+		m.rightPanelItems = []RightPanelItem{}
 	}
 
 	return m
+}
+
+// isItemVisible checks if an item should be visible (not hidden by collapsed parent)
+func (m Model) isItemVisible(index int) bool {
+	if index < 0 || index >= len(m.rightPanelItems) {
+		return false
+	}
+
+	item := m.rightPanelItems[index]
+
+	// プロジェクトは常に表示
+	if item.Type == "project" {
+		return true
+	}
+
+	// コンテナの場合、親プロジェクトが展開されているか確認
+	if item.ProjectName != "" {
+		for _, pItem := range m.rightPanelItems {
+			if pItem.Type == "project" && pItem.Name == item.ProjectName {
+				return pItem.IsExpanded
+			}
+		}
+	}
+
+	// 単体コンテナは常に表示
+	return true
+}
+
+// handleProjectToggle toggles project expand/collapse
+func (m Model) handleProjectToggle() (Model, tea.Cmd) {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return m, nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// プロジェクトの場合のみトグル
+	if selectedItem.Type == "project" {
+		// IsExpandedを反転
+		m.rightPanelItems[m.rightPanelCursor].IsExpanded = !m.rightPanelItems[m.rightPanelCursor].IsExpanded
+
+		// 表示を再構築
+		m = m.updateRightPanelItems()
+	}
+
+	return m, nil
+}
+
+// isSelectedContainerCompose checks if the selected container is a compose container
+func (m Model) isSelectedContainerCompose() bool {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return false
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// プロジェクト自体はCompose
+	if selectedItem.Type == "project" {
+		return true
+	}
+
+	// コンテナの場合、ProjectNameがあればCompose
+	if selectedItem.Type == "container" && selectedItem.ProjectName != "" {
+		return true
+	}
+
+	return false
+}
+
+// handleContainerToggle handles start/stop toggle
+func (m Model) handleContainerToggle() (Model, tea.Cmd) {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return m, nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	if selectedItem.Type == "project" {
+		// プロジェクト全体の操作
+		m.showConfirmDialog = true
+		m.confirmAction = "toggle_project"
+		m.confirmTarget = selectedItem.ProjectName
+		m.confirmType = "project"
+	} else {
+		// 個別コンテナの操作
+		container := m.getSelectedContainer()
+		if container == nil {
+			return m, nil
+		}
+
+		action := "start"
+		if container.Status == "running" {
+			action = "stop"
+		}
+
+		m.showConfirmDialog = true
+		m.confirmAction = action
+		m.confirmTarget = container.ID
+		m.confirmType = "container"
+	}
+
+	return m, nil
+}
+
+// handleContainerRestart handles container restart
+func (m Model) handleContainerRestart() (Model, tea.Cmd) {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return m, nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	if selectedItem.Type == "project" {
+		// プロジェクト全体の再起動
+		m.showConfirmDialog = true
+		m.confirmAction = "restart_project"
+		m.confirmTarget = selectedItem.ProjectName
+		m.confirmType = "project"
+	} else {
+		// 個別コンテナの再起動
+		container := m.getSelectedContainer()
+		if container == nil {
+			return m, nil
+		}
+
+		m.showConfirmDialog = true
+		m.confirmAction = "restart"
+		m.confirmTarget = container.ID
+		m.confirmType = "container"
+	}
+
+	return m, nil
+}
+
+// handleContainerRebuild handles container rebuild (Compose only)
+func (m Model) handleContainerRebuild() (Model, tea.Cmd) {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return m, nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	if selectedItem.Type == "project" {
+		// プロジェクト全体のリビルド
+		m.showConfirmDialog = true
+		m.confirmAction = "rebuild_project"
+		m.confirmTarget = selectedItem.ProjectName
+		m.confirmType = "project"
+	} else if selectedItem.ProjectName != "" {
+		// Composeコンテナのリビルド
+		m.showConfirmDialog = true
+		m.confirmAction = "rebuild"
+		m.confirmTarget = selectedItem.ContainerID
+		m.confirmType = "container"
+	}
+
+	return m, nil
+}
+
+// getSelectedContainer returns the currently selected container
+func (m Model) getSelectedContainer() *monitor.DockerContainer {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// プロジェクトの場合はnil
+	if selectedItem.Type == "project" {
+		return nil
+	}
+
+	// コンテナIDから検索
+	containers := monitor.GetDockerContainers()
+	for i := range containers {
+		if containers[i].ID == selectedItem.ContainerID {
+			return &containers[i]
+		}
+	}
+
+	return nil
+}
+
+// executeCommand executes the confirmed command
+func (m Model) executeCommand() (Model, tea.Cmd) {
+	m.showConfirmDialog = false
+
+	// コマンドを非同期で実行
+	return m, executeCommandCmd(m.confirmTarget, m.confirmAction, m.confirmType)
+}
+
+// executeCommandMsg is sent when command execution completes
+type executeCommandMsg struct {
+	success bool
+	message string
+}
+
+// executeCommandCmd executes a command asynchronously
+func executeCommandCmd(target, action, targetType string) tea.Cmd {
+	return func() tea.Msg {
+		result := monitor.ExecuteDockerCommand(target, action, targetType)
+		return executeCommandMsg{
+			success: result.Success,
+			message: result.Message,
+		}
+	}
+}
+
+// fetchContainerStatsCmd fetches container stats for all running containers
+func (m Model) fetchContainerStatsCmd() tea.Cmd {
+	return func() tea.Msg {
+		containers := monitor.GetDockerContainers()
+
+		// 並列で統計を取得
+		type statsResult struct {
+			containerID string
+			stats       monitor.DockerStats
+			imageSize   string
+		}
+
+		results := make(chan statsResult, len(containers))
+
+		for _, c := range containers {
+			go func(container monitor.DockerContainer) {
+				stats := monitor.GetDockerContainerStats(container.ID)
+				imageSize := monitor.GetDockerImageSize(container.Image)
+
+				results <- statsResult{
+					containerID: container.ID,
+					stats:       stats,
+					imageSize:   imageSize,
+				}
+			}(c)
+		}
+
+		// 全ての結果を収集
+		cacheMap := make(map[string]*ContainerStatsCache)
+		for i := 0; i < len(containers); i++ {
+			result := <-results
+			cacheMap[result.containerID] = &ContainerStatsCache{
+				Stats:     result.stats,
+				ImageSize: result.imageSize,
+				UpdatedAt: time.Now(),
+			}
+		}
+
+		close(results)
+
+		return containerStatsMsg{
+			Containers:     cacheMap,
+			ContainersList: containers,
+		}
+	}
 }
 
 // Run starts the TUI

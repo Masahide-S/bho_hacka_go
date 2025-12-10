@@ -8,10 +8,12 @@ import (
 
 // DockerContainer represents a Docker container
 type DockerContainer struct {
-	ID     string
-	Name   string
-	Status string
-	Image  string
+	ID             string
+	Name           string
+	Status         string
+	Image          string
+	ComposeProject string // Composeプロジェクト名（空の場合は単体）
+	ComposeService string // Composeサービス名
 }
 
 // CheckDocker checks if Docker is running and counts containers
@@ -74,10 +76,10 @@ func getDockerContainerDetails() []string {
 			portInfo := extractMainPort(ports)
 
 			// CPU・メモリ使用量取得
-			stats := getDockerContainerStats(containerID)
+			stats := GetDockerContainerStats(containerID)
 
 			// イメージサイズ取得
-			imageSize := getDockerImageSize(image)
+			imageSize := GetDockerImageSize(image)
 
 			// 基本情報
 			containerInfo := fmt.Sprintf("  - %s [%s] | %s", name, portInfo, status)
@@ -116,8 +118,8 @@ func getDockerContainerDetails() []string {
 	return containers
 }
 
-// getDockerImageSize returns the size of a Docker image
-func getDockerImageSize(imageName string) string {
+// GetDockerImageSize returns the size of a Docker image
+func GetDockerImageSize(imageName string) string {
 	cmd := exec.Command("docker", "images", imageName, "--format", "{{.Size}}")
 	output, err := cmd.Output()
 
@@ -134,8 +136,8 @@ type DockerStats struct {
 	MemUsage string
 }
 
-// getDockerContainerStats returns CPU and memory stats for a container
-func getDockerContainerStats(containerID string) DockerStats {
+// GetDockerContainerStats returns CPU and memory stats for a container
+func GetDockerContainerStats(containerID string) DockerStats {
 	cmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", containerID)
 	output, err := cmd.Output()
 
@@ -290,13 +292,50 @@ func GetDockerContainers() []DockerContainer {
 			status = "running"
 		}
 
+		containerID := parts[0]
+
+		// Compose情報を取得（軽量版）
+		composeProject, composeService := getComposeInfo(containerID)
+
 		containers = append(containers, DockerContainer{
-			ID:     parts[0],
-			Name:   parts[1],
-			Status: status,
-			Image:  parts[3],
+			ID:             containerID,
+			Name:           parts[1],
+			Status:         status,
+			Image:          parts[3],
+			ComposeProject: composeProject,
+			ComposeService: composeService,
 		})
 	}
 
 	return containers
+}
+
+// getComposeInfo returns compose project and service for a container (lightweight)
+func getComposeInfo(containerID string) (project, service string) {
+	// Composeプロジェクト名を取得
+	cmd := exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project\"}}")
+	output, err := cmd.Output()
+	if err == nil {
+		project = strings.TrimSpace(string(output))
+		if project == "<no value>" {
+			project = ""
+		}
+	}
+
+	// Composeサービス名を取得
+	cmd = exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.service\"}}")
+	output, err = cmd.Output()
+	if err == nil {
+		service = strings.TrimSpace(string(output))
+		if service == "<no value>" {
+			service = ""
+		}
+	}
+
+	return project, service
+}
+
+// IsComposeContainer checks if a container is part of a compose project
+func IsComposeContainer(container DockerContainer) bool {
+	return container.ComposeProject != ""
 }

@@ -7,7 +7,7 @@ var (
 	bgColor        = lipgloss.Color("#1a1b26")
 	fgColor        = lipgloss.Color("#c0caf5")
 	borderColor    = lipgloss.Color("#7aa2f7") // ← 明るく変更（青系）
-	accentColor    = lipgloss.Color("#7dcfff") // ← より明るく
+	accentColor    = lipgloss.Color("#ff9e64") // ← オレンジに変更
 	successColor   = lipgloss.Color("#9ece6a")
 	errorColor     = lipgloss.Color("#f7768e")
 	warningColor   = lipgloss.Color("#e0af68")
