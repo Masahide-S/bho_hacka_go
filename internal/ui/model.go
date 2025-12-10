@@ -56,6 +56,11 @@ type Model struct {
 	// Cache
 	serviceCache map[string]*ServiceCache
 	tickCount    int
+
+	// Right panel navigation
+	focusedPanel     string   // "left" or "right"
+	rightPanelCursor int      // 右パネルのカーソル位置
+	rightPanelItems  []string // 右パネルの選択可能な項目
 }
 
 // InitialModel returns the initial model
@@ -80,6 +85,9 @@ func InitialModel() Model {
 		systemResources: monitor.GetSystemResources(),
 		serviceCache:    make(map[string]*ServiceCache),
 		tickCount:       0,
+		focusedPanel:    "left",
+		rightPanelCursor: 0,
+		rightPanelItems: []string{},
 	}
 }
 
@@ -112,27 +120,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
+		// h/←: 左パネルへ移動
+		case "h", "left":
+			if m.focusedPanel == "right" {
+				m.focusedPanel = "left"
+			}
+			return m, nil
+
+		// l/→: 右パネルへ移動
+		case "l", "right":
+			if m.focusedPanel == "left" {
+				m.focusedPanel = "right"
+				m.rightPanelCursor = 0
+				m = m.updateRightPanelItems()
+			}
+			return m, nil
+
 		case "up", "k":
-			m.selectedItem--
-			if m.selectedItem >= 0 && m.menuItems[m.selectedItem].Type == "separator" {
+			if m.focusedPanel == "left" {
+				// 左パネルのカーソル移動
 				m.selectedItem--
+				if m.selectedItem >= 0 && m.menuItems[m.selectedItem].Type == "separator" {
+					m.selectedItem--
+				}
+				if m.selectedItem < 0 {
+					m.selectedItem = len(m.menuItems) - 1
+				}
+				return m, m.fetchSelectedServiceCmd()
+			} else {
+				// 右パネルのカーソル移動
+				if m.rightPanelCursor > 0 {
+					m.rightPanelCursor--
+				}
+				return m, nil
 			}
-			if m.selectedItem < 0 {
-				m.selectedItem = len(m.menuItems) - 1
-			}
-			// 選択変更時、キャッシュが古ければ再取得
-			return m, m.fetchSelectedServiceCmd()
 
 		case "down", "j":
-			m.selectedItem++
-			if m.selectedItem < len(m.menuItems) && m.menuItems[m.selectedItem].Type == "separator" {
+			if m.focusedPanel == "left" {
+				// 左パネルのカーソル移動
 				m.selectedItem++
+				if m.selectedItem < len(m.menuItems) && m.menuItems[m.selectedItem].Type == "separator" {
+					m.selectedItem++
+				}
+				if m.selectedItem >= len(m.menuItems) {
+					m.selectedItem = 0
+				}
+				return m, m.fetchSelectedServiceCmd()
+			} else {
+				// 右パネルのカーソル移動
+				if m.rightPanelCursor < len(m.rightPanelItems)-1 {
+					m.rightPanelCursor++
+				}
+				return m, nil
 			}
-			if m.selectedItem >= len(m.menuItems) {
-				m.selectedItem = 0
-			}
-			// 選択変更時、キャッシュが古ければ再取得
-			return m, m.fetchSelectedServiceCmd()
 		}
 
 	case tea.WindowSizeMsg:
@@ -229,9 +269,10 @@ func (m Model) fetchSelectedServiceCmd() tea.Cmd {
 		return nil
 	}
 
-	// 更新中フラグを立てる
-	if _, exists := m.serviceCache[serviceName]; exists {
-		m.serviceCache[serviceName].Updating = true
+	// 更新中フラグを立てる（既存のデータを保持）
+	if cache, exists := m.serviceCache[serviceName]; exists {
+		cache.Updating = true
+		m.serviceCache[serviceName] = cache
 	} else {
 		m.serviceCache[serviceName] = &ServiceCache{
 			Data:      "",
@@ -391,6 +432,27 @@ func isServiceRunning(processName string) bool {
 	cmd := exec.Command("pgrep", processName)
 	err := cmd.Run()
 	return err == nil
+}
+
+// updateRightPanelItems updates the right panel items based on selected service
+func (m Model) updateRightPanelItems() Model {
+	selectedItem := m.menuItems[m.selectedItem]
+	m.rightPanelItems = []string{}
+
+	switch selectedItem.Name {
+	case "Docker":
+		// Dockerコンテナ一覧を取得
+		containers := monitor.GetDockerContainers()
+		for _, c := range containers {
+			m.rightPanelItems = append(m.rightPanelItems, c.Name)
+		}
+
+	default:
+		// その他は選択不可
+		m.rightPanelItems = []string{}
+	}
+
+	return m
 }
 
 // Run starts the TUI

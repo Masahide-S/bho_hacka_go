@@ -138,12 +138,19 @@ func (m Model) renderRightDetail(width, height int) string {
 
 		// キャッシュから取得（即座に表示）
 		if cache, exists := m.serviceCache[selectedItem.Name]; exists {
-			content = cache.Data
+			baseContent := cache.Data
 
-			// 更新中の表示
-			if cache.Updating {
+			// 右パネルにフォーカスがあり、選択可能な項目がある場合、強調表示
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				content = m.renderSelectableContent(baseContent)
+			} else {
+				content = baseContent
+			}
+
+			// 更新中の表示（データが空の場合のみ）
+			if cache.Updating && cache.Data == "" {
 				ageSeconds := int(time.Since(cache.UpdatedAt).Seconds())
-				content += fmt.Sprintf("\n\n更新中... (最終更新: %d秒前)", ageSeconds)
+				content = fmt.Sprintf("データ取得中... (%d秒経過)", ageSeconds)
 			}
 		} else {
 			// キャッシュがない場合
@@ -327,9 +334,49 @@ func (m Model) renderHeader() string {
 	)
 }
 
+// renderSelectableContent renders content with selectable items highlighted
+func (m Model) renderSelectableContent(baseContent string) string {
+	lines := strings.Split(baseContent, "\n")
+	var newLines []string
+
+	itemIndex := 0
+	for _, line := range lines {
+		// 選択可能な項目かチェック
+		isSelectable := false
+		for _, item := range m.rightPanelItems {
+			if strings.Contains(line, item) {
+				isSelectable = true
+				break
+			}
+		}
+
+		if isSelectable {
+			// カーソル位置なら強調表示
+			if itemIndex == m.rightPanelCursor {
+				line = "> " + line + " <"
+			} else {
+				line = "  " + line
+			}
+			itemIndex++
+		}
+
+		newLines = append(newLines, line)
+	}
+
+	return strings.Join(newLines, "\n")
+}
+
 // renderFooter renders the footer
 func (m Model) renderFooter() string {
-	return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行")
+	if m.focusedPanel == "left" {
+		return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | l/→: 詳細へ")
+	} else {
+		if len(m.rightPanelItems) > 0 {
+			return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る")
+		} else {
+			return HelpStyle.Render("q: 終了 | h/←: 戻る")
+		}
+	}
 }
 
 // wrapWithHeaderFooter adds header, footer, and outer border

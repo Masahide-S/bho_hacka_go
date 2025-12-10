@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+// DockerContainer represents a Docker container
+type DockerContainer struct {
+	ID     string
+	Name   string
+	Status string
+	Image  string
+}
+
 // CheckDocker checks if Docker is running and counts containers
 func CheckDocker() string {
 	cmd := exec.Command("docker", "ps", "-q")
@@ -253,4 +261,42 @@ func extractMainPort(ports string) string {
 	}
 
 	return ports
+}
+
+// GetDockerContainers returns list of all Docker containers (simple version)
+func GetDockerContainers() []DockerContainer {
+	cmd := exec.Command("docker", "ps", "-a", "--format", "{{.ID}}|{{.Names}}|{{.Status}}|{{.Image}}")
+	output, err := cmd.Output()
+
+	if err != nil {
+		return []DockerContainer{}
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var containers []DockerContainer
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) < 4 {
+			continue
+		}
+
+		status := "exited"
+		if strings.Contains(parts[2], "Up") {
+			status = "running"
+		}
+
+		containers = append(containers, DockerContainer{
+			ID:     parts[0],
+			Name:   parts[1],
+			Status: status,
+			Image:  parts[3],
+		})
+	}
+
+	return containers
 }
