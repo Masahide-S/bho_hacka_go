@@ -1,14 +1,15 @@
 package ui
 
 import (
-	"os/exec"
-	"time"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
-	"github.com/Masahide-S/bho_hacka_go/internal/logger"
 	"github.com/Masahide-S/bho_hacka_go/internal/ai"
+	"github.com/Masahide-S/bho_hacka_go/internal/logger"
+	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
 )
 
 
@@ -59,9 +60,11 @@ type Model struct {
 	tickCount    int
 
 	// AI関連フィールド
-	aiService  *ai.Service
-	aiState    int
-	aiResponse string
+	aiService    *ai.Service
+	aiState      int
+	aiResponse   string
+	aiPendingCmd string // 実行待ちのコマンド
+	aiCmdResult  string // コマンド実行結果
 }
 
 
@@ -80,6 +83,14 @@ type aiAnalysisMsg struct {
 	Result string
 	Err    error
 }
+
+// cmdExecMsg はコマンド実行結果を運ぶメッセージ
+type cmdExecMsg struct {
+	Result string
+}
+
+// コマンド抽出用の正規表現
+var cmdRegex = regexp.MustCompile(`<cmd>(.*?)</cmd>`)
 
 
 // InitialModel returns the initial model
@@ -105,8 +116,10 @@ func InitialModel() Model {
 		serviceCache:    make(map[string]*ServiceCache),
 		tickCount:       0,
 
-		aiService: ai.NewService(),
-		aiState:   aiStateIdle,
+		aiService:    ai.NewService(),
+		aiState:      aiStateIdle,
+		aiPendingCmd: "",
+		aiCmdResult:  "",
 	}
 }
 
@@ -134,6 +147,30 @@ func tick() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// AIのコマンド実行待ち状態の時のキー操作
+		if m.aiPendingCmd != "" {
+			switch msg.String() {
+			case "enter":
+				// コマンド実行
+				cmdStr := m.aiPendingCmd
+				m.aiPendingCmd = ""
+				m.aiCmdResult = fmt.Sprintf("実行中: %s...", cmdStr)
+				return m, executePendingCmd(cmdStr)
+
+			case "esc", "n":
+				// キャンセル
+				m.aiPendingCmd = ""
+				m.aiCmdResult = "コマンド実行をキャンセルしました。"
+				return m, nil
+
+			case "q", "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			}
+			// コマンド待ちの時は他の操作をブロック
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
@@ -167,6 +204,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if selectedItem.Type == "ai" && m.aiState != aiStateLoading {
 				m.aiState = aiStateLoading
 				m.aiResponse = ""
+				m.aiPendingCmd = "" // リセット
+				m.aiCmdResult = ""  // リセット
 				return m, m.runAIAnalysisCmd()
 			}
 		}
@@ -237,8 +276,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.aiState = aiStateSuccess
 			m.aiResponse = msg.Result
+
+			// コマンドが含まれているかチェック
+			matches := cmdRegex.FindStringSubmatch(msg.Result)
+			if len(matches) > 1 {
+				m.aiPendingCmd = matches[1] // コマンド部分を抽出して保存
+			} else {
+				m.aiPendingCmd = ""
+			}
 		}
 		return m, nil
+
+	// コマンド実行結果の受信
+	case cmdExecMsg:
+		m.aiCmdResult = msg.Result
+		// 実行後に最新の状態を反映するため、全サービス再取得をトリガー
+		return m, m.fetchAllServicesCmd()
 	}
 
 	return m, nil
@@ -249,11 +302,29 @@ func (m Model) runAIAnalysisCmd() tea.Cmd {
 	return func() tea.Msg {
 		// コンテキスト構築（RAG）
 		prompt := m.aiService.BuildSystemContext()
-		
+
 		// 推論実行
 		result, err := m.aiService.Analyze(prompt)
-		
+
 		return aiAnalysisMsg{Result: result, Err: err}
+	}
+}
+
+// executePendingCmd はシェル経由でコマンドを実行
+func executePendingCmd(command string) tea.Cmd {
+	return func() tea.Msg {
+		// sh -c を使うことでパイプやリダイレクトを含むコマンドも実行可能
+		cmd := exec.Command("sh", "-c", command)
+		output, err := cmd.CombinedOutput()
+
+		result := ""
+		if err != nil {
+			result = fmt.Sprintf("✗ 実行エラー: %v\n%s", err, string(output))
+		} else {
+			result = fmt.Sprintf("✓ 実行成功:\n%s", string(output))
+		}
+
+		return cmdExecMsg{Result: result}
 	}
 }
 

@@ -40,7 +40,7 @@ type Service struct {
 func NewService() *Service {
 	return &Service{
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 0 * time.Second,
 		},
 	}
 }
