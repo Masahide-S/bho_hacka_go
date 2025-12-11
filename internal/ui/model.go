@@ -15,6 +15,19 @@ import (
 	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
 )
 
+// 画面モードの定義
+type viewMode int
+
+const (
+	viewMonitor viewMode = iota // 通常リスト
+	viewGraphRealtime           // 直近詳細グラフ (gキー)
+	viewGraphHistory            // 3日間トレンド (hキー)
+)
+
+// graphDataMsg はグラフデータ取得完了時のメッセージ
+type graphDataMsg struct {
+	data []float64
+}
 
 // tickMsg is sent every second to trigger updates
 type tickMsg time.Time
@@ -153,6 +166,11 @@ type Model struct {
 	dbStore    *db.Store
 	dbChan     chan monitor.FullSnapshot // 書き込み用キュー
 	lastDBSave time.Time                 // 保存間隔制御用
+
+	// --- Graph View State ---
+	currentView viewMode
+	graphData   []float64
+	message     string
 }
 
 
@@ -267,6 +285,7 @@ func InitialModelWithStore(store *db.Store) Model {
 		selectedModel:          0,
 		dbStore:                store,
 		dbChan:                 make(chan monitor.FullSnapshot, 50), // バッファを持たせる
+		currentView:            viewMonitor,
 	}
 
 	// 裏方（DBワーカー）を始動
@@ -427,8 +446,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		// h/←: 左パネルへ移動
+		// ESC: グラフモードから戻る、またはダイアログを閉じる
+		case "esc":
+			if m.currentView != viewMonitor {
+				m.currentView = viewMonitor
+				m.message = ""
+				return m, nil
+			}
+			// 通常モードでのESC処理（ダイアログなどを閉じる）
+			if m.showConfirmDialog {
+				m.showConfirmDialog = false
+				m.confirmAction = ""
+				m.confirmTarget = ""
+				return m, nil
+			}
+			if m.showLogView {
+				m.showLogView = false
+				m.logContent = ""
+				m.logScroll = 0
+				m.logTargetName = ""
+				return m, nil
+			}
+			return m, nil
+
+		// g: リアルタイムグラフモードへ
+		case "g":
+			if !m.showConfirmDialog && !m.showLogView && m.currentView == viewMonitor {
+				m.currentView = viewGraphRealtime
+				m.message = "Loading Realtime Graph..."
+				return m, m.fetchGraphDataCmd(viewGraphRealtime)
+			}
+
+		// h: 左パネルへ移動、または左パネル時/グラフモード時はヒストリーグラフへ
 		case "h", "left":
+			// 既にグラフモードならヒストリーへ切り替え
+			if m.currentView != viewMonitor {
+				m.currentView = viewGraphHistory
+				m.message = "Loading 3-Day History..."
+				return m, m.fetchGraphDataCmd(viewGraphHistory)
+			}
+			// 左パネルにいる場合はヒストリーグラフへ
+			if m.focusedPanel == "left" && !m.showConfirmDialog && !m.showLogView {
+				m.currentView = viewGraphHistory
+				m.message = "Loading 3-Day History..."
+				return m, m.fetchGraphDataCmd(viewGraphHistory)
+			}
+			// 右パネルにいる場合は左パネルへ戻る
 			if m.focusedPanel == "right" {
 				m.focusedPanel = "left"
 			}
@@ -682,7 +745,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.executeCommand()
 			}
 
-		case "n", "N", "esc":
+		case "n", "N":
 			if m.showConfirmDialog {
 				m.showConfirmDialog = false
 				m.confirmAction = ""
@@ -847,6 +910,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, tea.Batch(cmds...)
+
+	case graphDataMsg:
+		m.graphData = msg.data
+		m.message = ""
+		return m, nil
 
 	case serviceDataMsg:
 		// キャッシュ更新
@@ -1743,6 +1811,29 @@ func fetchPostgresConnectionCmd() tea.Cmd {
 	return func() tea.Msg {
 		conn := monitor.GetPostgresConnection()
 		return postgresConnectionMsg(conn)
+	}
+}
+
+// fetchGraphDataCmd はグラフデータを非同期で取得
+func (m Model) fetchGraphDataCmd(mode viewMode) tea.Cmd {
+	return func() tea.Msg {
+		if m.dbStore == nil {
+			return graphDataMsg{data: []float64{}}
+		}
+
+		var data []float64
+		var err error
+
+		if mode == viewGraphRealtime {
+			data, err = m.dbStore.GetRecentMetrics(100)
+		} else if mode == viewGraphHistory {
+			data, err = m.dbStore.GetLongTermMetrics(3)
+		}
+
+		if err != nil {
+			return graphDataMsg{data: []float64{}}
+		}
+		return graphDataMsg{data: data}
 	}
 }
 

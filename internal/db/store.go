@@ -94,3 +94,13 @@ func (s *Store) cleanupOldData(retention time.Duration) {
 	hours := fmt.Sprintf("-%d hours", int(retention.Hours()))
 	s.db.Exec("DELETE FROM system_metrics WHERE timestamp < datetime('now', ?)", hours)
 }
+
+// SaveMetric は現在のメトリクスを保存します（シンプル版）
+func (s *Store) SaveMetric(cpu, disk float64, memUsed, memTotal int64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO system_metrics (timestamp, cpu_usage, memory_used, memory_total, disk_usage)
+		VALUES (?, ?, ?, ?, ?)`,
+		time.Now().UTC(), cpu, memUsed, memTotal, disk,
+	)
+	return err
+}
