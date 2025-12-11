@@ -2,10 +2,9 @@ package ai
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/Masahide-S/bho_hacka_go/internal/llm"
-	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
+	// monitorパッケージの直接参照は削除し、llmパッケージ経由でデータ取得します
 )
 
 const (
@@ -40,50 +39,54 @@ func (s *Service) GetModel() string {
 }
 
 // BuildSystemContext は現在のシステム状態を収集し、システムプロンプトとユーザーコンテキストを返します
-// 戻り値: (systemPrompt, userContext)
+// 変更点: internal/llm/data.go の CollectAllContext を使用し、JSON形式で情報を渡すように変更
 func (s *Service) BuildSystemContext() (string, string) {
-	// AIへの役割指示（System Prompt）
-	systemPrompt := `あなたは開発環境のトラブルシューティングを行う優秀なAIアシスタントです。
-提供されるシステム状況を分析し、開発者が気づくべき問題点や改善案を簡潔に指摘してください。
-深刻なエラーがある場合は、具体的な解決コマンドを <cmd>コマンド</cmd> の形式で提案してください。
-回答形式:
-- 短い要約
-- 発見された問題点（あれば）
-- 推奨されるアクション`
+	// 1. システムプロンプト（デモ用・強力なコマンド誘導）
+	systemPrompt := `あなたは開発環境のトラブルシューティングを行う優秀なDevOpsアシスタントです。
+ユーザーから提供される「システム状況レポート(JSON形式)」を分析し、以下の手順で回答してください。
 
-	// 各モニターから情報を収集（RAG: Retrieval）
-	sysRes := monitor.GetSystemResources()
+1. **現状分析**:
+   - 停止しているコンテナ (Status: Exitedなど)
+   - エラーが出ているデータベース
+   - 異常にCPU/メモリを消費しているプロセス
+   これらがないか確認してください。
 
-	dockerStatus := monitor.CheckDocker()
-	nodeStatus := monitor.CheckNodejs()
-	pythonStatus := monitor.CheckPython()
-	postgresStatus := monitor.CheckPostgres()
-	ports := monitor.ListAllPorts()
+2. **報告**:
+   - 発見された問題点、または「システムは正常です」という結果を、**日本語で簡潔に** 述べてください。
 
-	// 分析対象のデータ（User Context）
-	userContext := fmt.Sprintf(`
-[システムリソース]
-CPU: %.1f%%
-Memory: %.1fGB / %.1fGB (%.0f%%)
+3. **解決策の提案 (重要)**:
+   - 問題を解決するために実行すべきコマンドを **1つだけ** 提案してください。
+   - **コマンドは必ず <cmd> と </cmd> のタグで囲んでください。** これによりUIが自動的に実行ボタンを表示します。
 
-[Docker状態]
-%s
+---
+**回答例1 (コンテナ停止時):**
+PostgreSQLのコンテナが停止しています。再起動が必要です。
+<cmd>docker start postgres-container</cmd>
 
-[Node.js状態]
-%s
+**回答例2 (システム正常時):**
+システムリソース、各サービス共に正常に稼働しています。
+念のためディスク容量を確認しますか？
+<cmd>df -h</cmd>
+---
+`
 
-[Python状態]
-%s
+	// 2. データ収集 (RAG)
+	// internal/llm/data.go のリッチな収集機能を利用
+	fullCtx, err := llm.CollectAllContext()
 
-[データベース状態]
-%s
-
-[ポート使用状況]
-%s
-`,
-		sysRes.CPUUsage, float64(sysRes.MemoryUsed)/1024, float64(sysRes.MemoryTotal)/1024, sysRes.MemoryPerc,
-		dockerStatus, nodeStatus, pythonStatus, postgresStatus, ports,
-	)
+	var userContext string
+	if err != nil {
+		// 万が一収集に失敗した場合のフォールバック
+		userContext = "システム情報の取得に失敗しました: " + err.Error()
+	} else {
+		// JSON化してLLMに渡す（構造化データの方がLLMの理解度が高い）
+		jsonStr, err := llm.FormatAsJSON(fullCtx)
+		if err != nil {
+			userContext = "コンテキストのJSON変換に失敗しました"
+		} else {
+			userContext = "以下は現在のシステム状況レポートです:\n" + jsonStr
+		}
+	}
 
 	return systemPrompt, userContext
 }
@@ -113,7 +116,7 @@ func (s *Service) AnalyzeWithContext(ctx context.Context, prompt string) (string
 	return s.client.Generate(ctx, msgs, s.Model)
 }
 
-// AnalyzeStream はストリーミングでOllamaに問い合わせを行います（システムプロンプトとユーザープロンプトを分離）
+// AnalyzeStream はストリーミングでOllamaに問い合わせを行います
 func (s *Service) AnalyzeStream(ctx context.Context, systemPrompt, userPrompt string) (<-chan llm.GenerateResponseStream, error) {
 	msgs := s.buildMessages(systemPrompt, userPrompt)
 	return s.client.GenerateStream(ctx, msgs, s.Model)
