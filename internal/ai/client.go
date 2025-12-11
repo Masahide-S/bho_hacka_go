@@ -1,48 +1,42 @@
 package ai
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"time"
 
+	"github.com/Masahide-S/bho_hacka_go/internal/llm"
 	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
 )
 
 const (
 	// OllamaのデフォルトURL
-	OllamaURL = "http://localhost:11434/api/generate"
-	// 使用するモデル（事前に ollama pull llama3.2 などを実行してください）
-	ModelName = "llama3.2" 
+	OllamaEndpoint = "http://localhost:11434"
+	// デフォルトモデル名
+	DefaultModelName = "llama3.2"
 )
-
-// OllamaRequest はAPIへのリクエスト構造体
-type OllamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
-}
-
-// OllamaResponse はAPIからのレスポンス構造体
-type OllamaResponse struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
-}
 
 // Service はAI機能を提供します
 type Service struct {
-	client *http.Client
+	client *llm.OllamaClient
+	Model  string // 現在選択中のモデル
 }
 
 // NewService は新しいAIサービスを作成します
 func NewService() *Service {
 	return &Service{
-		client: &http.Client{
-			Timeout: 0 * time.Second,
-		},
+		client: llm.NewOllamaClient(OllamaEndpoint),
+		Model:  DefaultModelName,
 	}
+}
+
+// SetModel は使用するモデルを変更します
+func (s *Service) SetModel(model string) {
+	s.Model = model
+}
+
+// GetModel は現在使用中のモデル名を取得します
+func (s *Service) GetModel() string {
+	return s.Model
 }
 
 // BuildSystemContext は現在のシステム状態を収集してプロンプト用テキストを作成します
@@ -95,38 +89,29 @@ Memory: %.1fGB / %.1fGB (%.0f%%)
 	return prompt
 }
 
-// Analyze はOllamaに問い合わせを行います
+// Analyze はOllamaに問い合わせを行います（非ストリーミング）
 func (s *Service) Analyze(prompt string) (string, error) {
-	reqBody := OllamaRequest{
-		Model:  ModelName,
-		Prompt: prompt,
-		Stream: false, // 簡単のためストリームなしで実装
-	}
+	ctx := context.Background()
+	return s.client.Generate(ctx, prompt, s.Model)
+}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", err
-	}
+// AnalyzeWithContext はコンテキスト付きでOllamaに問い合わせを行います
+func (s *Service) AnalyzeWithContext(ctx context.Context, prompt string) (string, error) {
+	return s.client.Generate(ctx, prompt, s.Model)
+}
 
-	resp, err := s.client.Post(OllamaURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("Ollama接続エラー: %v (Ollamaは起動していますか？)", err)
-	}
-	defer resp.Body.Close()
+// AnalyzeStream はストリーミングでOllamaに問い合わせを行います
+// 戻り値の型はllm.GenerateResponseStreamで、エラー情報も含まれます
+func (s *Service) AnalyzeStream(ctx context.Context, prompt string) (<-chan llm.GenerateResponseStream, error) {
+	return s.client.GenerateStream(ctx, prompt, s.Model)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("APIエラー: %s", resp.Status)
-	}
+// CheckHealth はOllamaサーバーへの接続を確認します
+func (s *Service) CheckHealth(ctx context.Context) error {
+	return s.client.CheckHealth(ctx)
+}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var ollamaResp OllamaResponse
-	if err := json.Unmarshal(body, &ollamaResp); err != nil {
-		return "", err
-	}
-
-	return ollamaResp.Response, nil
+// ListModels は利用可能なモデル一覧を取得します
+func (s *Service) ListModels(ctx context.Context) ([]string, error) {
+	return s.client.ListModels(ctx)
 }

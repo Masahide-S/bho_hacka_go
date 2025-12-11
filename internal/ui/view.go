@@ -70,13 +70,25 @@ func (m Model) renderLeftMenu(width, height int) string {
 
 		// AI項目の特別表示
 		if item.Type == "ai" {
+			// Ollama接続状態のマーク
+			statusMark := " ●" // デフォルト（未確認）
+			statusStyle := InfoStyle
+
+			if m.ollamaAvailable {
+				statusMark = " ✓"
+				statusStyle = SuccessStyle
+			} else {
+				statusMark = " ✗"
+				statusStyle = ErrorStyle
+			}
+
 			issueText := ""
 			if m.aiIssueCount > 0 {
 				issueText = WarningStyle.Render(fmt.Sprintf(" [%d件]", m.aiIssueCount))
 			}
-			
-			line := cursor + item.Name + issueText
-			
+
+			line := cursor + item.Name + statusStyle.Render(statusMark) + issueText
+
 			if i == m.selectedItem {
 				line = HighlightStyle.Render(line)
 			}
@@ -160,19 +172,22 @@ func (m Model) renderRightDetail(width, height int) string {
 
 // renderAIAnalysis renders AI analysis result
 func (m Model) renderAIAnalysis() string {
+	// ヘッダー部分：モデル情報と接続状態
+	header := m.renderAIHeader()
+
 	switch m.aiState {
 	case aiStateLoading:
-		return `AI Assistant
-
-環境を分析中...
+		// ストリーミング中は既に受信した内容を表示
+		if m.aiResponse != "" {
+			return header + "\n\n" + m.aiResponse + "\n\n" + InfoStyle.Render("生成中...")
+		}
+		return header + "\n\n" + `環境を分析中...
 
 Ollamaが環境情報を読み取っています。
 しばらくお待ちください。`
 
 	case aiStateSuccess:
-		baseContent := fmt.Sprintf(`AI Analysis Result
-
-%s`, m.aiResponse)
+		baseContent := header + "\n\n" + m.aiResponse
 
 		// コマンド実行待ちの場合のプロンプト表示
 		if m.aiPendingCmd != "" {
@@ -210,7 +225,7 @@ Ollamaが環境情報を読み取っています。
 		return baseContent
 
 	case aiStateError:
-		return fmt.Sprintf(`AI Assistant
+		return header + fmt.Sprintf(`
 
 エラーが発生しました:
 %s
@@ -218,12 +233,36 @@ Ollamaが環境情報を読み取っています。
 [a] 再試行`, m.aiResponse)
 
 	default: // aiStateIdle
-		return `AI Assistant
+		return header + `
 
 環境分析の準備ができています。
 
 [a] キーを押して環境全体を分析`
 	}
+}
+
+// renderAIHeader はAI画面のヘッダー情報を生成します
+func (m Model) renderAIHeader() string {
+	// 接続状態
+	statusText := ""
+	if m.ollamaAvailable {
+		statusText = SuccessStyle.Render("● 接続中")
+	} else {
+		statusText = ErrorStyle.Render("● 未接続")
+	}
+
+	// モデル情報
+	modelText := ""
+	if len(m.availableModels) > 0 {
+		modelText = fmt.Sprintf("Model: %s", m.aiService.GetModel())
+		if len(m.availableModels) > 1 {
+			modelText += CommentStyle.Render(fmt.Sprintf(" (Tab: %d個利用可能)", len(m.availableModels)))
+		}
+	} else {
+		modelText = fmt.Sprintf("Model: %s", m.aiService.GetModel())
+	}
+
+	return fmt.Sprintf("AI Assistant  %s\n%s", statusText, modelText)
 }
 
 // renderServiceDetail renders service detail
@@ -357,6 +396,11 @@ func (m Model) renderHeader() string {
 
 // renderFooter renders the footer
 func (m Model) renderFooter() string {
+	// AI分析選択中の場合、追加のヘルプを表示
+	selectedItem := m.menuItems[m.selectedItem]
+	if selectedItem.Type == "ai" && len(m.availableModels) > 1 {
+		return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行 | Tab: モデル切替")
+	}
 	return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行")
 }
 
