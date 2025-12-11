@@ -46,6 +46,9 @@ type topProcessesDataMsg struct {
 	UpdatedAt time.Time
 }
 
+// postgresConnectionMsg is sent when PostgreSQL connection info is fetched
+type postgresConnectionMsg monitor.PostgresConnection
+
 // MenuItem represents an item in the left menu
 type MenuItem struct {
 	Name     string
@@ -106,8 +109,9 @@ type Model struct {
 	cachedPythonProcesses   []monitor.PythonProcess         // Pythonプロセスのキャッシュ
 	cachedPorts             []monitor.PortInfo              // ポート一覧のキャッシュ
 	cachedPortsUpdatedAt    time.Time                       // ポート一覧の最終更新時刻
-	cachedTopProcesses      []monitor.ProcessInfo           // Top 10プロセスのキャッシュ
-	tickCount               int
+	cachedTopProcesses         []monitor.ProcessInfo           // Top 10プロセスのキャッシュ
+	cachedPostgresConnection   monitor.PostgresConnection      // PostgreSQL接続情報のキャッシュ
+	tickCount                  int
 
 	// Right panel navigation
 	focusedPanel     string            // "left" or "right"
@@ -187,6 +191,12 @@ type aiHealthMsg struct {
 type aiModelsMsg struct {
 	Models []string
 	Err    error
+}
+
+// serviceStatusResultMsg はサービス状態チェックの結果を運ぶメッセージ
+type serviceStatusResultMsg struct {
+	Index  int
+	Status string
 }
 
 // コマンド抽出用の正規表現
@@ -295,6 +305,56 @@ func waitForStreamResponse(sub <-chan llm.GenerateResponseStream) tea.Cmd {
 	}
 }
 
+
+// updateServiceStatusCmd はサービス状態を非同期でチェックするコマンドを生成します
+func updateServiceStatusCmd(menuItems []MenuItem) []tea.Cmd {
+	var cmds []tea.Cmd
+
+	for i, item := range menuItems {
+		if item.Type != "service" {
+			continue
+		}
+
+		// 各サービスごとにgoroutineでチェックを実行するコマンドを作成
+		index := i
+		serviceName := item.Name
+
+		cmds = append(cmds, func() tea.Msg {
+			var processName string
+			switch serviceName {
+			case "PostgreSQL":
+				processName = "postgres"
+			case "MySQL":
+				processName = "mysqld"
+			case "Redis":
+				processName = "redis-server"
+			case "Docker":
+				processName = "docker"
+			case "Node.js":
+				processName = "node"
+			case "Python":
+				processName = "python"
+			default:
+				return nil // チェック対象外
+			}
+
+			// タイムアウト付きでpgrepを実行（monitorパッケージを利用）
+			isRunning := monitor.IsServiceRunning(processName)
+
+			status := "✗"
+			if isRunning {
+				status = "✓"
+			}
+
+			return serviceStatusResultMsg{
+				Index:  index,
+				Status: status,
+			}
+		})
+	}
+
+	return cmds
+}
 
 // tick returns a command that sends a tickMsg every second
 func tick() tea.Cmd {
@@ -670,8 +730,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		cmds = append(cmds, tick())
 
-		// 毎秒: サービス起動/停止チェック（並列化済みで高速）
-		m = m.updateServiceStatus()
+		// 毎秒: サービス起動/停止チェック（非同期コマンドに変更）
+		cmds = append(cmds, updateServiceStatusCmd(m.menuItems)...)
 
 		// 2秒ごと: システムリソース更新
 		if m.tickCount%2 == 0 {
@@ -685,6 +745,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// サービス詳細: 3秒ごと（選択中）
 			if m.tickCount%3 == 0 {
 				cmds = append(cmds, m.fetchSelectedServiceCmd())
+				// PostgreSQLが選択されている場合、接続情報も非同期で取得
+				if selectedItem.Name == "PostgreSQL" {
+					cmds = append(cmds, fetchPostgresConnectionCmd())
+				}
 			}
 		} else if selectedItem.Type == "info" {
 			// ポート一覧: 3秒ごと（選択中、高速更新）
@@ -728,6 +792,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Data:      msg.Data,
 			UpdatedAt: msg.UpdatedAt,
 			Updating:  false,
+		}
+		return m, nil
+
+	case serviceStatusResultMsg:
+		// 非同期サービス状態チェックの結果を反映
+		if msg.Index >= 0 && msg.Index < len(m.menuItems) {
+			m.menuItems[msg.Index].Status = msg.Status
 		}
 		return m, nil
 
@@ -801,6 +872,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if selectedItem.Name == "Top 10 プロセス" {
 			m = m.updateRightPanelItems()
 		}
+
+		return m, nil
+
+	case postgresConnectionMsg:
+		// PostgreSQL接続情報のキャッシュを更新
+		m.cachedPostgresConnection = monitor.PostgresConnection(msg)
+		return m, nil
 
 		// AI分析結果の受信
 	case aiAnalysisMsg:
@@ -1056,68 +1134,6 @@ func (m Model) fetchNonSelectedServicesCmd() tea.Cmd {
 	}
 
 	return tea.Batch(cmds...)
-}
-
-// updateServiceStatus updates the status of services (parallel version)
-func (m Model) updateServiceStatus() Model {
-	// チャネルで結果を受け取る
-	type statusResult struct {
-		index  int
-		status string
-	}
-
-	results := make(chan statusResult, len(m.menuItems))
-
-	// 並列でチェック
-	activeCount := 0
-	for i, item := range m.menuItems {
-		if item.Type != "service" {
-			continue
-		}
-
-		activeCount++
-		go func(index int, serviceName string) {
-			var processName string
-			switch serviceName {
-			case "PostgreSQL":
-				processName = "postgres"
-			case "MySQL":
-				processName = "mysqld"
-			case "Redis":
-				processName = "redis-server"
-			case "Docker":
-				processName = "docker"
-			case "Node.js":
-				processName = "node"
-			case "Python":
-				processName = "python"
-			}
-
-			status := "✗"
-			if isServiceRunning(processName) {
-				status = "✓"
-			}
-
-			results <- statusResult{index: index, status: status}
-		}(i, item.Name)
-	}
-
-	// 結果を収集
-	for i := 0; i < activeCount; i++ {
-		result := <-results
-		m.menuItems[result.index].Status = result.status
-	}
-
-	close(results)
-
-	return m
-}
-
-// isServiceRunning checks if a service is running
-func isServiceRunning(processName string) bool {
-	cmd := exec.Command("pgrep", processName)
-	err := cmd.Run()
-	return err == nil
 }
 
 // updateRightPanelItems updates the right panel items based on selected service
@@ -1657,6 +1673,14 @@ func (m Model) fetchTopProcessesDataCmd() tea.Cmd {
 			Processes: processes,
 			UpdatedAt: time.Now(),
 		}
+	}
+}
+
+// fetchPostgresConnectionCmd fetches PostgreSQL connection info asynchronously
+func fetchPostgresConnectionCmd() tea.Cmd {
+	return func() tea.Msg {
+		conn := monitor.GetPostgresConnection()
+		return postgresConnectionMsg(conn)
 	}
 }
 

@@ -9,8 +9,8 @@ import (
 
 // renderPostgresContent renders PostgreSQL database information
 func (m Model) renderPostgresContent() string {
-	// 接続情報を取得
-	conn := monitor.GetPostgresConnection()
+	// キャッシュから接続情報を取得（Viewでのブロッキング処理を排除）
+	conn := m.cachedPostgresConnection
 
 	if !conn.IsRunning {
 		return "PostgreSQL: 停止中"
@@ -86,10 +86,10 @@ func (m Model) renderDatabaseDetails(database *monitor.PostgresDatabase) string 
 func (m Model) renderSelectablePostgresContent() string {
 	var newLines []string
 
-	// キャッシュから取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	databases := m.cachedPostgresDatabases
 	if len(databases) == 0 {
-		databases = monitor.GetPostgresDatabases()
+		return "  データ取得中..."
 	}
 
 	// 各データベースを表示

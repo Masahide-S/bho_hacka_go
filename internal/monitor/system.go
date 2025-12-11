@@ -2,10 +2,8 @@ package monitor
 
 import (
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // SystemResources holds system resource information
@@ -70,9 +68,8 @@ func GetSystemResources() SystemResources {
 // getCPUUsage returns current CPU usage percentage
 func getCPUUsage() float64 {
 	// 軽量版: ps コマンドで全プロセスのCPU使用率を合計
-	// top -l 1 (1秒) → ps (50ms) に変更
-	cmd := exec.Command("sh", "-c", "ps -A -o %cpu | awk '{s+=$1} END {print s}'")
-	output, err := cmd.Output()
+	// タイムアウト付きで実行
+	output, err := RunCommandWithTimeout("sh", "-c", "ps -A -o %cpu | awk '{s+=$1} END {print s}'")
 
 	if err != nil {
 		return 0.0
@@ -84,9 +81,8 @@ func getCPUUsage() float64 {
 
 // getMemoryUsed returns used memory in MB using vm_stat parsing
 func getMemoryUsed() int64 {
-	// vm_stat の出力を取得
-	cmd := exec.Command("vm_stat")
-	output, err := cmd.Output()
+	// vm_stat の出力を取得（タイムアウト付き）
+	output, err := RunCommandWithTimeout("vm_stat")
 	if err != nil {
 		return 0
 	}
@@ -133,8 +129,8 @@ func getMemoryTotal() int64 {
 		return cachedMemoryTotal
 	}
 
-	cmd := exec.Command("sysctl", "-n", "hw.memsize")
-	output, err := cmd.Output()
+	// タイムアウト付きで実行
+	output, err := RunCommandWithTimeout("sysctl", "-n", "hw.memsize")
 
 	if err != nil {
 		return 0
@@ -184,9 +180,8 @@ type MemoryStats struct {
 
 // getDetailedMemoryStats returns detailed memory statistics (Activity Monitor style)
 func getDetailedMemoryStats() MemoryStats {
-	// vm_stat の出力を取得
-	cmd := exec.Command("vm_stat")
-	output, err := cmd.Output()
+	// vm_stat の出力を取得（タイムアウト付き）
+	output, err := RunCommandWithTimeout("vm_stat")
 	if err != nil {
 		return MemoryStats{}
 	}
@@ -267,9 +262,8 @@ type DiskStats struct {
 
 // getDiskStats returns disk statistics
 func getDiskStats() DiskStats {
-	// df -h / でルートパーティションの情報を取得
-	cmd := exec.Command("df", "-g", "/")
-	output, err := cmd.Output()
+	// df -g / でルートパーティションの情報を取得（タイムアウト付き）
+	output, err := RunCommandWithTimeout("df", "-g", "/")
 	if err != nil {
 		return DiskStats{}
 	}
@@ -304,8 +298,8 @@ func getDiskStats() DiskStats {
 
 // getCPUCores returns the number of CPU cores
 func getCPUCores() int {
-	cmd := exec.Command("sysctl", "-n", "hw.ncpu")
-	output, err := cmd.Output()
+	// タイムアウト付きで実行
+	output, err := RunCommandWithTimeout("sysctl", "-n", "hw.ncpu")
 	if err != nil {
 		return 0
 	}
@@ -316,8 +310,8 @@ func getCPUCores() int {
 
 // getProcessCount returns the number of running processes
 func getProcessCount() int {
-	cmd := exec.Command("sh", "-c", "ps -A | wc -l")
-	output, err := cmd.Output()
+	// タイムアウト付きで実行
+	output, err := RunCommandWithTimeout("sh", "-c", "ps -A | wc -l")
 	if err != nil {
 		return 0
 	}
@@ -329,8 +323,8 @@ func getProcessCount() int {
 
 // getSystemUptime returns system uptime
 func getSystemUptime() string {
-	cmd := exec.Command("uptime")
-	output, err := cmd.Output()
+	// タイムアウト付きで実行
+	output, err := RunCommandWithTimeout("uptime")
 	if err != nil {
 		return "不明"
 	}
@@ -357,30 +351,33 @@ func getSystemUptime() string {
 	return strings.TrimSpace(uptimeStr)
 }
 
-// getDiskUsage returns disk usage percentage and free space in GB using syscall.Statfs
+// getDiskUsage returns disk usage percentage and free space in GB using df command
 func getDiskUsage() (float64, int64) {
-	var stat syscall.Statfs_t
-	err := syscall.Statfs("/", &stat)
+	// df コマンドを使用（タイムアウト付き）
+	output, err := RunCommandWithTimeout("df", "-g", "/")
 	if err != nil {
 		return 0.0, 0
 	}
 
-	// Total blocks と Available blocks から計算
-	totalBlocks := stat.Blocks
-	availableBlocks := stat.Bavail
-	blockSize := uint64(stat.Bsize)
-
-	// 使用済みブロック数 = Total - Available
-	usedBlocks := totalBlocks - availableBlocks
-
-	// 使用率（%）
-	usagePerc := 0.0
-	if totalBlocks > 0 {
-		usagePerc = (float64(usedBlocks) / float64(totalBlocks)) * 100
+	lines := strings.Split(string(output), "\n")
+	if len(lines) < 2 {
+		return 0.0, 0
 	}
 
-	// 空き容量（GB）
-	freeGB := int64(availableBlocks * blockSize / (1024 * 1024 * 1024))
+	fields := strings.Fields(lines[1])
+	if len(fields) < 4 {
+		return 0.0, 0
+	}
 
-	return usagePerc, freeGB
+	// GB単位で取得
+	total, _ := strconv.ParseInt(fields[1], 10, 64)
+	used, _ := strconv.ParseInt(fields[2], 10, 64)
+	free, _ := strconv.ParseInt(fields[3], 10, 64)
+
+	usagePerc := 0.0
+	if total > 0 {
+		usagePerc = (float64(used) / float64(total)) * 100
+	}
+
+	return usagePerc, free
 }

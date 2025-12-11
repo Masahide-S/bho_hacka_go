@@ -1,7 +1,6 @@
 package monitor
 
 import (
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,9 +18,9 @@ type PortInfo struct {
 
 // GetListeningPorts returns all listening ports
 func GetListeningPorts() []PortInfo {
-	cmd := exec.Command("lsof", "-i", "-P", "-n")
-	output, err := cmd.Output()
-	
+	// タイムアウト付きで実行（lsofはハングしやすいため）
+	output, err := RunCommandWithTimeout("lsof", "-i", "-P", "-n")
+
 	if err != nil {
 		return []PortInfo{}
 	}
@@ -117,9 +116,13 @@ func ListAllPorts() string {
 
 // getDockerProjectNameByPID returns the Docker project/container name by PID
 func getDockerProjectNameByPID(pid string) string {
-	// psコマンドでプロセスのコマンドラインを取得
-	cmd := exec.Command("ps", "-p", pid, "-o", "command=")
-	output, err := cmd.Output()
+	// PIDのバリデーション
+	if !IsValidPID(pid) {
+		return "Docker"
+	}
+
+	// タイムアウト付きでpsコマンドを実行
+	output, err := RunCommandWithTimeout("ps", "-p", pid, "-o", "command=")
 	if err != nil {
 		return "Docker"
 	}

@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -15,8 +14,13 @@ type ProcessStats struct {
 
 // getProcessStats returns CPU and memory usage for a single process
 func getProcessStats(pid string) ProcessStats {
-	cmd := exec.Command("ps", "-o", "%cpu,rss", "-p", pid)
-	output, err := cmd.Output()
+	// PIDのバリデーション
+	if !IsValidPID(pid) {
+		return ProcessStats{}
+	}
+
+	// タイムアウト付きでpsコマンドを実行
+	output, err := RunCommandWithTimeout("ps", "-o", "%cpu,rss", "-p", pid)
 
 	if err != nil {
 		return ProcessStats{}
@@ -43,9 +47,13 @@ func getProcessStats(pid string) ProcessStats {
 
 // getMultiProcessStats returns total CPU and memory for multiple processes
 func getMultiProcessStats(processName string) ProcessStats {
-	// 全PIDs取得
-	cmd := exec.Command("pgrep", processName)
-	output, err := cmd.Output()
+	// プロセス名のバリデーション
+	if !IsValidIdentifier(processName) {
+		return ProcessStats{}
+	}
+
+	// タイムアウト付きでpgrepを実行
+	output, err := RunCommandWithTimeout("pgrep", processName)
 
 	if err != nil {
 		return ProcessStats{}
@@ -56,12 +64,23 @@ func getMultiProcessStats(processName string) ProcessStats {
 		return ProcessStats{}
 	}
 
-	// カンマ区切りのPIDリスト作成
-	pidList := strings.Join(pids, ",")
+	// 各PIDをバリデーション
+	var validPids []string
+	for _, pid := range pids {
+		pid = strings.TrimSpace(pid)
+		if IsValidPID(pid) {
+			validPids = append(validPids, pid)
+		}
+	}
+	if len(validPids) == 0 {
+		return ProcessStats{}
+	}
 
-	// ps で一括取得
-	psCmd := exec.Command("ps", "-o", "%cpu,rss", "-p", pidList)
-	psOutput, err := psCmd.Output()
+	// カンマ区切りのPIDリスト作成
+	pidList := strings.Join(validPids, ",")
+
+	// タイムアウト付きでpsを実行
+	psOutput, err := RunCommandWithTimeout("ps", "-o", "%cpu,rss", "-p", pidList)
 
 	if err != nil {
 		return ProcessStats{}

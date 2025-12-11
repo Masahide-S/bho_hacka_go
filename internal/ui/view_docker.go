@@ -11,9 +11,10 @@ import (
 func (m Model) renderDockerContent() string {
 	// キャッシュから取得（高速化）
 	containers := m.cachedContainers
+
+	// キャッシュがない場合はローディング表示（Viewではブロッキング処理を行わない）
 	if len(containers) == 0 {
-		// キャッシュがない場合は取得
-		containers = monitor.GetDockerContainers()
+		return "データ取得中... (Docker)"
 	}
 
 	// 統計情報を生成
@@ -70,10 +71,10 @@ func (m Model) renderDockerContent() string {
 
 // renderProjectDetails renders detailed information for a selected project
 func (m Model) renderProjectDetails(projectName string) string {
-	// キャッシュから取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	containers := m.cachedContainers
 	if len(containers) == 0 {
-		containers = monitor.GetDockerContainers()
+		return "データ取得中..."
 	}
 
 	// プロジェクト内のコンテナを集計
@@ -197,10 +198,10 @@ func (m Model) renderContainerDetails(container *monitor.DockerContainer) string
 func (m Model) renderSelectableContent(baseContent string) string {
 	var newLines []string
 
-	// キャッシュから取得（高速化）
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	containers := m.cachedContainers
 	if len(containers) == 0 {
-		containers = monitor.GetDockerContainers()
+		return "データ取得中..."
 	}
 
 	containerMap := make(map[string]*monitor.DockerContainer)

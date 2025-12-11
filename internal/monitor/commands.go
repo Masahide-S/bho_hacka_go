@@ -23,6 +23,11 @@ func ExecuteDockerCommand(target, action, targetType string) CommandResult {
 
 // executeDockerContainerCommand executes command on a specific container
 func executeDockerContainerCommand(containerID, action string) CommandResult {
+	// セキュリティバリデーション: コンテナIDが16進数のみであることを確認
+	if !IsValidContainerID(containerID) {
+		return CommandResult{Success: false, Message: "不正なコンテナIDです"}
+	}
+
 	var cmd *exec.Cmd
 
 	switch action {
@@ -59,6 +64,11 @@ func executeDockerContainerCommand(containerID, action string) CommandResult {
 
 // executeComposeProjectCommand executes command on entire compose project
 func executeComposeProjectCommand(projectName, action string) CommandResult {
+	// セキュリティバリデーション: プロジェクト名が安全な文字のみであることを確認
+	if !IsValidIdentifier(projectName) {
+		return CommandResult{Success: false, Message: "不正なプロジェクト名です"}
+	}
+
 	// プロジェクトのコンテナを取得してワーキングディレクトリを見つける
 	workDir := findComposeWorkDir(projectName)
 	if workDir == "" {
@@ -244,6 +254,11 @@ func getActionJapanese(action string) string {
 
 // ExecutePostgresCommand executes a PostgreSQL command
 func ExecutePostgresCommand(databaseName, action string) CommandResult {
+	// セキュリティバリデーション: データベース名が安全な文字のみであることを確認
+	if !IsValidIdentifier(databaseName) {
+		return CommandResult{Success: false, Message: "不正なデータベース名です"}
+	}
+
 	var cmd *exec.Cmd
 
 	switch action {
@@ -286,6 +301,11 @@ func ExecutePostgresCommand(databaseName, action string) CommandResult {
 
 // ExecuteNodeCommand executes a Node.js process command
 func ExecuteNodeCommand(pid, action string) CommandResult {
+	// セキュリティバリデーション: PIDが数字のみであることを確認
+	if !IsValidPID(pid) {
+		return CommandResult{Success: false, Message: "不正なPIDです"}
+	}
+
 	var cmd *exec.Cmd
 
 	switch action {
@@ -323,6 +343,11 @@ func ExecuteNodeCommand(pid, action string) CommandResult {
 
 // ExecuteMySQLCommand executes a MySQL command
 func ExecuteMySQLCommand(databaseName, action string) CommandResult {
+	// セキュリティバリデーション: データベース名が安全な文字のみであることを確認
+	if !IsValidIdentifier(databaseName) {
+		return CommandResult{Success: false, Message: "不正なデータベース名です"}
+	}
+
 	var cmd *exec.Cmd
 
 	switch action {
@@ -360,12 +385,17 @@ func ExecuteMySQLCommand(databaseName, action string) CommandResult {
 
 // ExecuteRedisCommand executes a Redis command
 func ExecuteRedisCommand(dbIndex, action string) CommandResult {
+	// セキュリティバリデーション: dbIndexが安全な形式であることを確認
+	dbNum := strings.TrimPrefix(dbIndex, "db")
+	if !IsValidPID(dbNum) { // PIDバリデーションを流用（数字のみ）
+		return CommandResult{Success: false, Message: "不正なデータベースインデックスです"}
+	}
+
 	var cmd *exec.Cmd
 
 	switch action {
 	case "flushdb":
 		// データベースをクリア
-		dbNum := strings.TrimPrefix(dbIndex, "db")
 		cmd = exec.Command("redis-cli", "-n", dbNum, "FLUSHDB")
 	default:
 		return CommandResult{Success: false, Message: "不明なアクション"}
@@ -393,6 +423,11 @@ func ExecuteRedisCommand(dbIndex, action string) CommandResult {
 
 // ExecutePythonCommand executes a Python process command
 func ExecutePythonCommand(pid, action string) CommandResult {
+	// セキュリティバリデーション: PIDが数字のみであることを確認
+	if !IsValidPID(pid) {
+		return CommandResult{Success: false, Message: "不正なPIDです"}
+	}
+
 	var cmd *exec.Cmd
 
 	switch action {
@@ -430,6 +465,11 @@ func ExecutePythonCommand(pid, action string) CommandResult {
 
 // ExecutePortCommand executes a command on a port (process)
 func ExecutePortCommand(pid, action string) CommandResult {
+	// セキュリティバリデーション: PIDが数字のみであることを確認
+	if !IsValidPID(pid) {
+		return CommandResult{Success: false, Message: "不正なPIDです"}
+	}
+
 	var cmd *exec.Cmd
 
 	switch action {
