@@ -26,6 +26,11 @@ func (m Model) View() string {
 		return m.renderWithConfirmDialog(mainView)
 	}
 
+	// ログビューを重ねて表示
+	if m.showLogView {
+		return m.renderWithLogView(mainView)
+	}
+
 	return mainView
 }
 
@@ -424,19 +429,54 @@ func (m Model) renderFooter() string {
 			if selectedItem.Name == "Docker" {
 				isCompose := m.isSelectedContainerCompose()
 
+				// 起動/停止のラベルを動的に決定
+				startStopText := "s: 起動/停止"
+				if m.rightPanelCursor < len(m.rightPanelItems) {
+					item := m.rightPanelItems[m.rightPanelCursor]
+					if item.Type == "project" {
+						// プロジェクト全体の場合、コンテナの状態を確認
+						containers := m.cachedContainers
+						runningCount := 0
+						totalCount := 0
+						for _, c := range containers {
+							if c.ComposeProject == item.Name {
+								totalCount++
+								if c.Status == "running" {
+									runningCount++
+								}
+							}
+						}
+						if runningCount > 0 && runningCount == totalCount {
+							startStopText = "s: 停止"
+						} else {
+							startStopText = "s: 起動"
+						}
+					} else if item.Type == "container" {
+						// 個別コンテナの場合
+						container := m.getSelectedContainer()
+						if container != nil {
+							if container.Status == "running" {
+								startStopText = "s: 停止"
+							} else {
+								startStopText = "s: 起動"
+							}
+						}
+					}
+				}
+
 				if isCompose {
 					// Composeコンテナ: すべてのコマンドが使える
-					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | s: 起動/停止 | r: 再起動 | b: リビルド | d: 削除 | o: VSCodeで開く")
+					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | " + startStopText + " | r: 再起動 | b: リビルド | d: 削除 | c: クリーン | L: ログ | o: VSCodeで開く")
 				} else {
 					// 単体コンテナ: リビルドは使えない
-					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | s: 起動/停止 | r: 再起動 | d: 削除 | o: VSCodeで開く")
+					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | " + startStopText + " | r: 再起動 | d: 削除 | c: クリーン | L: ログ | o: VSCodeで開く")
 				}
 			} else if selectedItem.Name == "PostgreSQL" {
 				// PostgreSQLの場合
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | v: VACUUM | a: ANALYZE")
 			} else if selectedItem.Name == "Node.js" {
 				// Node.jsの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | o: VSCodeで開く")
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | L: ログ | o: VSCodeで開く")
 			} else if selectedItem.Name == "MySQL" {
 				// MySQLの場合
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | o: 最適化")
@@ -445,7 +485,7 @@ func (m Model) renderFooter() string {
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | f: FLUSHDB")
 			} else if selectedItem.Name == "Python" {
 				// Pythonの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | o: VSCodeで開く")
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | L: ログ | o: VSCodeで開く")
 			} else if selectedItem.Name == "ポート一覧" {
 				// ポート一覧の場合
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")

@@ -82,11 +82,14 @@ func executeComposeProjectCommand(projectName, action string) CommandResult {
 	// docker-compose v1 or v2
 	if strings.HasPrefix(composeCmd, "docker-compose") {
 		switch action {
-		case "toggle_project":
-			// 起動/停止はupとdownで実現
+		case "start_project":
 			cmd = exec.Command("docker-compose", "-f", workDir+"/docker-compose.yml", "up", "-d")
+		case "stop_project":
+			cmd = exec.Command("docker-compose", "-f", workDir+"/docker-compose.yml", "stop")
+		case "delete_project":
+			cmd = exec.Command("docker-compose", "-f", workDir+"/docker-compose.yml", "down")
 		case "restart_project":
-			cmd = exec.Command("docker-compose", "-f", workDir+"/docker-compose.yml", "restart")
+			cmd = exec.Command("docker-compose", "-f", workDir+"/docker-compose.yml", "up", "-d")
 		case "rebuild_project":
 			cmd = exec.Command("docker-compose", "-f", workDir+"/docker-compose.yml", "up", "-d", "--build")
 		default:
@@ -95,10 +98,14 @@ func executeComposeProjectCommand(projectName, action string) CommandResult {
 	} else {
 		// docker compose v2
 		switch action {
-		case "toggle_project":
+		case "start_project":
 			cmd = exec.Command("docker", "compose", "-f", workDir+"/docker-compose.yml", "up", "-d")
+		case "stop_project":
+			cmd = exec.Command("docker", "compose", "-f", workDir+"/docker-compose.yml", "stop")
+		case "delete_project":
+			cmd = exec.Command("docker", "compose", "-f", workDir+"/docker-compose.yml", "down")
 		case "restart_project":
-			cmd = exec.Command("docker", "compose", "-f", workDir+"/docker-compose.yml", "restart")
+			cmd = exec.Command("docker", "compose", "-f", workDir+"/docker-compose.yml", "up", "-d")
 		case "rebuild_project":
 			cmd = exec.Command("docker", "compose", "-f", workDir+"/docker-compose.yml", "up", "-d", "--build")
 		default:
@@ -116,8 +123,12 @@ func executeComposeProjectCommand(projectName, action string) CommandResult {
 
 	actionJP := ""
 	switch action {
-	case "toggle_project":
+	case "start_project":
 		actionJP = "起動"
+	case "stop_project":
+		actionJP = "停止"
+	case "delete_project":
+		actionJP = "削除"
 	case "restart_project":
 		actionJP = "再起動"
 	case "rebuild_project":
@@ -451,5 +462,23 @@ func ExecutePortCommand(pid, action string) CommandResult {
 	return CommandResult{
 		Success: true,
 		Message: fmt.Sprintf("プロセス (PID: %s) を%sしました", pid, actionJP),
+	}
+}
+
+// CleanDanglingImages removes all dangling images
+func CleanDanglingImages() CommandResult {
+	cmd := exec.Command("docker", "image", "prune", "-f")
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		return CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("ダングリングイメージの削除失敗: %s", string(output)),
+		}
+	}
+
+	return CommandResult{
+		Success: true,
+		Message: "ダングリングイメージを削除しました",
 	}
 }

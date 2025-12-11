@@ -3,6 +3,7 @@ package ui
 import (
 	"os/exec"
 
+	"github.com/Masahide-S/bho_hacka_go/internal/monitor/logs"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,9 +37,28 @@ func (m Model) handleContainerToggle() (Model, tea.Cmd) {
 
 	if selectedItem.Type == "project" {
 		// プロジェクト全体の操作
+		// プロジェクト内のコンテナの状態をチェック
+		containers := m.cachedContainers
+		runningCount := 0
+		totalCount := 0
+		for _, c := range containers {
+			if c.ComposeProject == selectedItem.Name {
+				totalCount++
+				if c.Status == "running" {
+					runningCount++
+				}
+			}
+		}
+
+		// すべて起動中なら停止、それ以外なら起動
+		action := "start_project"
+		if runningCount > 0 && runningCount == totalCount {
+			action = "stop_project"
+		}
+
 		m.showConfirmDialog = true
-		m.confirmAction = "toggle_project"
-		m.confirmTarget = selectedItem.ProjectName
+		m.confirmAction = action
+		m.confirmTarget = selectedItem.Name
 		m.confirmType = "project"
 	} else {
 		// 個別コンテナの操作
@@ -124,8 +144,12 @@ func (m Model) handleContainerRemove() (Model, tea.Cmd) {
 
 	selectedItem := m.rightPanelItems[m.rightPanelCursor]
 
-	// プロジェクトの削除は危険なので未対応
 	if selectedItem.Type == "project" {
+		// プロジェクト全体の削除
+		m.showConfirmDialog = true
+		m.confirmAction = "delete_project"
+		m.confirmTarget = selectedItem.Name
+		m.confirmType = "project"
 		return m, nil
 	}
 
@@ -189,6 +213,83 @@ func (m Model) handleOpenInVSCode() (Model, tea.Cmd) {
 	} else {
 		m.lastCommandResult = "ディレクトリ情報が見つかりません"
 	}
+
+	return m, nil
+}
+
+// handleViewContainerLogs handles viewing container logs
+func (m Model) handleViewContainerLogs() (Model, tea.Cmd) {
+	container := m.getSelectedContainer()
+	if container == nil {
+		return m, nil
+	}
+
+	return m, fetchContainerLogsCmd(container.ID, container.Name)
+}
+
+// containerLogsMsg is sent when container logs are fetched
+type containerLogsMsg struct {
+	content    string
+	targetName string
+	err        error
+}
+
+// fetchContainerLogsCmd fetches container logs asynchronously
+func fetchContainerLogsCmd(containerID, containerName string) tea.Cmd {
+	return func() tea.Msg {
+		logContent, err := logs.GetContainerLogs(containerID, 100)
+		return containerLogsMsg{
+			content:    logContent,
+			targetName: containerName,
+			err:        err,
+		}
+	}
+}
+
+// handleViewNodeProcessLogs handles viewing Node.js process logs
+func (m Model) handleViewNodeProcessLogs() (Model, tea.Cmd) {
+	process := m.getSelectedNodeProcess()
+	if process == nil {
+		return m, nil
+	}
+
+	return m, fetchProcessLogsCmd(process.ProjectDir, process.ProjectName)
+}
+
+// handleViewPythonProcessLogs handles viewing Python process logs
+func (m Model) handleViewPythonProcessLogs() (Model, tea.Cmd) {
+	process := m.getSelectedPythonProcess()
+	if process == nil {
+		return m, nil
+	}
+
+	return m, fetchProcessLogsCmd(process.ProjectDir, process.ProcessType)
+}
+
+// processLogsMsg is sent when process logs are fetched
+type processLogsMsg struct {
+	content    string
+	targetName string
+	err        error
+}
+
+// fetchProcessLogsCmd fetches process logs asynchronously
+func fetchProcessLogsCmd(projectDir, processName string) tea.Cmd {
+	return func() tea.Msg {
+		logContent, err := logs.GetProcessLogs(projectDir, 100)
+		return processLogsMsg{
+			content:    logContent,
+			targetName: processName,
+			err:        err,
+		}
+	}
+}
+
+// handleCleanDanglingImages handles cleaning dangling images
+func (m Model) handleCleanDanglingImages() (Model, tea.Cmd) {
+	m.showConfirmDialog = true
+	m.confirmAction = "clean_dangling"
+	m.confirmType = "docker_system"
 
 	return m, nil
 }

@@ -398,3 +398,89 @@ func getContainerPort(containerID string) string {
 
 	return ""
 }
+
+// GetDanglingImagesCount returns the count of dangling images
+func GetDanglingImagesCount() int {
+	// docker images -f "dangling=true" -q | wc -l
+	cmd := exec.Command("sh", "-c", "docker images -f \"dangling=true\" -q | wc -l")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	countStr := strings.TrimSpace(string(output))
+	count := 0
+	fmt.Sscanf(countStr, "%d", &count)
+	return count
+}
+
+// GetDanglingImagesSize returns the total size of dangling images
+func GetDanglingImagesSize() string {
+	// docker images -f "dangling=true" --format "{{.Size}}"
+	cmd := exec.Command("docker", "images", "-f", "dangling=true", "--format", "{{.Size}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return "0B"
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return "0B"
+	}
+
+	// サイズの合計を計算（単純化のため、最初の画像のサイズを返す）
+	// 実際の合計計算は複雑なので、概算として全体をカウント
+	totalBytes := int64(0)
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		// サイズ文字列をバイトに変換
+		bytes := parseSizeString(line)
+		totalBytes += bytes
+	}
+
+	return formatBytes(totalBytes)
+}
+
+// parseSizeString converts size string like "1.5GB" to bytes
+func parseSizeString(sizeStr string) int64 {
+	sizeStr = strings.TrimSpace(sizeStr)
+	if sizeStr == "" {
+		return 0
+	}
+
+	var value float64
+	var unit string
+	fmt.Sscanf(sizeStr, "%f%s", &value, &unit)
+
+	switch strings.ToUpper(unit) {
+	case "B":
+		return int64(value)
+	case "KB":
+		return int64(value * 1024)
+	case "MB":
+		return int64(value * 1024 * 1024)
+	case "GB":
+		return int64(value * 1024 * 1024 * 1024)
+	case "TB":
+		return int64(value * 1024 * 1024 * 1024 * 1024)
+	default:
+		return 0
+	}
+}
+
+// formatBytes converts bytes to human-readable format
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	return fmt.Sprintf("%.1f%s", float64(bytes)/float64(div), units[exp])
+}

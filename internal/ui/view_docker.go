@@ -32,12 +32,17 @@ func (m Model) renderDockerContent() string {
 	}
 	totalImages := len(imageSet)
 
+	// ダングリングイメージの数とサイズを取得
+	danglingCount := monitor.GetDanglingImagesCount()
+	danglingSize := monitor.GetDanglingImagesSize()
+
 	// 統計サマリー
 	summary := fmt.Sprintf(`統計情報:
   コンテナ: %d個 (稼働中: %d個)
   イメージ: %d種類
+  Dangling Images: %d個 (%s)
 
-`, totalContainers, runningContainers, totalImages)
+`, totalContainers, runningContainers, totalImages, danglingCount, danglingSize)
 
 	// 階層構造のコンテナリストを生成
 	containerList := m.renderSelectableContent("")

@@ -109,6 +109,12 @@ type Model struct {
 	confirmTarget     string // コンテナIDまたはプロジェクト名
 	confirmType       string // "container" or "project"
 	lastCommandResult string // 最後のコマンド実行結果
+
+	// Log viewing
+	showLogView   bool
+	logContent    string
+	logScroll     int
+	logTargetName string // ログ表示対象の名前
 }
 
 // InitialModel returns the initial model
@@ -149,6 +155,10 @@ func InitialModel() Model {
 		confirmTarget:     "",
 		confirmType:       "",
 		lastCommandResult: "",
+		showLogView:       false,
+		logContent:        "",
+		logScroll:         0,
+		logTargetName:     "",
 	}
 }
 
@@ -365,6 +375,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case "c":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			selectedItem := m.menuItems[m.selectedItem]
+			if selectedItem.Name == "Docker" {
+				return m.handleCleanDanglingImages()
+			}
+
+		case "L":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "Docker" {
+					return m.handleViewContainerLogs()
+				} else if selectedItem.Name == "Node.js" {
+					return m.handleViewNodeProcessLogs()
+				} else if selectedItem.Name == "Python" {
+					return m.handleViewPythonProcessLogs()
+				}
+			}
+
 		case "v":
 			if m.showConfirmDialog {
 				return m, nil
@@ -389,12 +423,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// スクロール（右パネルで詳細表示時のみ）
 		case "ctrl+d":
+			if m.showLogView {
+				m.logScroll += 5
+				return m, nil
+			}
 			if m.focusedPanel == "right" {
 				m.detailScroll += 5
 				return m, nil
 			}
 
 		case "ctrl+u":
+			if m.showLogView {
+				m.logScroll -= 5
+				if m.logScroll < 0 {
+					m.logScroll = 0
+				}
+				return m, nil
+			}
 			if m.focusedPanel == "right" {
 				m.detailScroll -= 5
 				if m.detailScroll < 0 {
@@ -416,7 +461,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmTarget = ""
 				return m, nil
 			}
+			if m.showLogView {
+				m.showLogView = false
+				m.logContent = ""
+				m.logScroll = 0
+				m.logTargetName = ""
+				return m, nil
+			}
 		}
+
+	case containerLogsMsg:
+		// コンテナログの取得結果を処理
+		if msg.err != nil {
+			m.lastCommandResult = fmt.Sprintf("ログ取得失敗: %v", msg.err)
+			return m, nil
+		}
+
+		m.showLogView = true
+		m.logContent = msg.content
+		m.logScroll = 999999 // 一番下から表示（view_logs.goで自動調整される）
+		m.logTargetName = msg.targetName
+
+		return m, nil
+
+	case processLogsMsg:
+		// プロセスログの取得結果を処理
+		if msg.err != nil {
+			m.lastCommandResult = fmt.Sprintf("ログ取得失敗: %v", msg.err)
+			return m, nil
+		}
+
+		m.showLogView = true
+		m.logContent = msg.content
+		m.logScroll = 999999 // 一番下から表示（view_logs.goで自動調整される）
+		m.logTargetName = msg.targetName
+
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -1182,6 +1262,10 @@ func executeCommandCmd(target, action, targetType string) tea.Cmd {
 			result = monitor.ExecutePythonCommand(target, action)
 		} else if targetType == "port" {
 			result = monitor.ExecutePortCommand(target, action)
+		} else if targetType == "docker_system" {
+			if action == "clean_dangling" {
+				result = monitor.CleanDanglingImages()
+			}
 		} else {
 			result = monitor.ExecuteDockerCommand(target, action, targetType)
 		}

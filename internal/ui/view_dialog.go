@@ -161,24 +161,52 @@ PID: %s
 
 [Y] はい
 [N] いいえ`, actionJP, actionDetail, m.confirmTarget)
+	} else if m.confirmType == "docker_system" {
+		// Dockerシステム操作
+		actionJP := ""
+		actionDetail := ""
+		switch m.confirmAction {
+		case "clean_dangling":
+			actionJP = "ダングリングイメージを削除"
+			actionDetail = "⚠ 使用されていないイメージを削除します"
+		}
+
+		dialogContent = fmt.Sprintf(`%s しますか？
+
+%s
+
+[Y] はい
+[N] いいえ`, actionJP, actionDetail)
 	} else if m.confirmType == "project" {
 		// プロジェクト全体の操作
 		actionJP := ""
+		actionDetail := ""
 		switch m.confirmAction {
-		case "toggle_project":
-			actionJP = "起動/停止"
+		case "start_project":
+			actionJP = "起動"
+			actionDetail = "このプロジェクトの全コンテナを起動します"
+		case "stop_project":
+			actionJP = "停止"
+			actionDetail = "このプロジェクトの全コンテナを停止します"
+		case "delete_project":
+			actionJP = "削除"
+			actionDetail = "⚠ このプロジェクトの全コンテナを削除します（ボリュームは保持）"
 		case "restart_project":
 			actionJP = "再起動"
+			actionDetail = "このプロジェクトの全コンテナを再起動します"
 		case "rebuild_project":
 			actionJP = "リビルド"
+			actionDetail = "このプロジェクトの全コンテナをリビルドします"
 		}
 
 		dialogContent = fmt.Sprintf(`プロジェクト全体を %s しますか？
 
+%s
+
 プロジェクト: %s (Compose)
 
 [Y] はい
-[N] いいえ`, actionJP, m.confirmTarget)
+[N] いいえ`, actionJP, actionDetail, m.confirmTarget)
 	} else {
 		// 個別コンテナの操作
 		container := m.getSelectedContainer()
