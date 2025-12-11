@@ -604,13 +604,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.logTargetName = ""
 				return m, nil
 			}
-		}
-
-	case containerLogsMsg:
-		// コンテナログの取得結果を処理
-		if msg.err != nil {
-			m.lastCommandResult = fmt.Sprintf("ログ取得失敗: %v", msg.err)
-			return m, nil
 
 		// [a] キーでAI分析開始（AI分析メニュー選択時のみ）
 		case "a":
@@ -635,7 +628,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedModel = (m.selectedModel + 1) % len(m.availableModels)
 				m.aiService.SetModel(m.availableModels[m.selectedModel])
 			}
-		}
+		} // switch msg.String() をここで閉じる
+
+	case containerLogsMsg:
+		// コンテナログの取得結果を処理
+		if msg.err != nil {
+			m.lastCommandResult = fmt.Sprintf("ログ取得失敗: %v", msg.err)
+			return m, nil
+		} // ← ここに if の閉じ括弧が抜けていました
 
 		m.showLogView = true
 		m.logContent = msg.content
