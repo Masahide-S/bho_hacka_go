@@ -3,8 +3,20 @@ package monitor
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
+
+// PythonProcess represents a Python process
+type PythonProcess struct {
+	PID         string
+	ProjectDir  string
+	ProcessType string
+	Uptime      string
+	CPUPerc     string
+	MemUsage    string
+	Port        string
+}
 
 // CheckPython checks if Python process is running
 func CheckPython() string {
@@ -150,4 +162,79 @@ func detectPythonProcessType(pid, projectDir string) string {
 	}
 
 	return "Python"
+}
+
+// GetPythonProcesses returns list of Python processes
+func GetPythonProcesses() []PythonProcess {
+	cmd := exec.Command("pgrep", "python")
+	output, err := cmd.Output()
+
+	if err != nil {
+		return []PythonProcess{}
+	}
+
+	pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(pids) == 0 {
+		return []PythonProcess{}
+	}
+
+	var processes []PythonProcess
+
+	for _, pid := range pids {
+		pid = strings.TrimSpace(pid)
+		if pid == "" {
+			continue
+		}
+
+		// カレントディレクトリ取得
+		cwdCmd := exec.Command("lsof", "-p", pid)
+		cwdOutput, err := cwdCmd.Output()
+
+		var projectDir string
+		if err == nil {
+			lines := strings.Split(string(cwdOutput), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, " cwd ") {
+					fields := strings.Fields(line)
+					if len(fields) > 0 {
+						projectDir = fields[len(fields)-1]
+						break
+					}
+				}
+			}
+		}
+
+		// 稼働時間取得
+		uptime := getProcessUptime(pid)
+
+		// CPU・メモリ使用量取得
+		stats := getProcessStats(pid)
+
+		// プロセス種別判定
+		processType := detectPythonProcessType(pid, projectDir)
+
+		// ポート番号取得
+		port := getProcessPort(pid)
+
+		// プロジェクト名を取得
+		projectName := processType
+		if projectDir != "" {
+			projectName = filepath.Base(projectDir)
+			if processType != "Python" {
+				projectName = projectName + " (" + processType + ")"
+			}
+		}
+
+		processes = append(processes, PythonProcess{
+			PID:         pid,
+			ProjectDir:  projectDir,
+			ProcessType: projectName,
+			Uptime:      uptime,
+			CPUPerc:     fmt.Sprintf("%.1f%%", stats.CPU),
+			MemUsage:    fmt.Sprintf("%.1fMB", float64(stats.Memory)/1024.0),
+			Port:        port,
+		})
+	}
+
+	return processes
 }

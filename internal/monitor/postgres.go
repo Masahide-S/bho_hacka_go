@@ -7,6 +7,26 @@ import (
 	"time"
 )
 
+// PostgresDatabase represents a PostgreSQL database
+type PostgresDatabase struct {
+	Name        string
+	Size        string
+	Created     string
+	LastAccess  string
+	Encoding    string
+	Collation   string
+	Owner       string
+}
+
+// PostgresConnection represents PostgreSQL connection info
+type PostgresConnection struct {
+	IsRunning  bool
+	Port       string
+	Uptime     string
+	CPUPerc    string
+	MemUsage   string
+}
+
 // CheckPostgres checks if PostgreSQL is running
 func CheckPostgres() string {
 	cmd := exec.Command("pgrep", "postgres")
@@ -241,11 +261,105 @@ func getPortByProcess(processName string) string {
 func getPostgresUptime() string {
 	cmd := exec.Command("sh", "-c", "ps -o etime= -p $(pgrep postgres | head -1)")
 	output, err := cmd.Output()
-	
+
 	if err != nil {
 		return ""
 	}
-	
+
 	uptime := strings.TrimSpace(string(output))
 	return uptime
+}
+
+// GetPostgresDatabases returns list of PostgreSQL databases
+func GetPostgresDatabases() []PostgresDatabase {
+	// データベース詳細情報を取得
+	query := `
+		SELECT
+			d.datname,
+			pg_size_pretty(pg_database_size(d.datname)) as size,
+			pg_encoding_to_char(d.encoding) as encoding,
+			d.datcollate as collation,
+			pg_catalog.pg_get_userbyid(d.datdba) as owner
+		FROM pg_database d
+		WHERE d.datistemplate = false
+		ORDER BY d.datname;
+	`
+
+	cmd := exec.Command("psql", "-d", "postgres", "-c", query, "-t", "-A", "-F", "|")
+	output, err := cmd.Output()
+
+	if err != nil {
+		return []PostgresDatabase{}
+	}
+
+	// 最終接続時刻を別途取得
+	accessQuery := `SELECT datname, stats_reset FROM pg_stat_database WHERE datname NOT IN ('template0', 'template1');`
+	accessCmd := exec.Command("psql", "-d", "postgres", "-c", accessQuery, "-t", "-A", "-F", "|")
+	accessOutput, _ := accessCmd.Output()
+
+	// 最終接続時刻をマップに格納
+	accessMap := make(map[string]string)
+	if accessOutput != nil {
+		accessLines := strings.Split(string(accessOutput), "\n")
+		for _, line := range accessLines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			parts := strings.Split(line, "|")
+			if len(parts) >= 2 {
+				dbName := strings.TrimSpace(parts[0])
+				accessTime := strings.TrimSpace(parts[1])
+				accessMap[dbName] = formatTimeAgo(accessTime)
+			}
+		}
+	}
+
+	var databases []PostgresDatabase
+	lines := strings.Split(string(output), "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) >= 5 {
+			dbName := strings.TrimSpace(parts[0])
+			databases = append(databases, PostgresDatabase{
+				Name:       dbName,
+				Size:       strings.TrimSpace(parts[1]),
+				Encoding:   strings.TrimSpace(parts[2]),
+				Collation:  strings.TrimSpace(parts[3]),
+				Owner:      strings.TrimSpace(parts[4]),
+				LastAccess: accessMap[dbName],
+			})
+		}
+	}
+
+	return databases
+}
+
+// GetPostgresConnection returns PostgreSQL connection info
+func GetPostgresConnection() PostgresConnection {
+	cmd := exec.Command("pgrep", "postgres")
+	err := cmd.Run()
+
+	conn := PostgresConnection{
+		IsRunning: err == nil,
+	}
+
+	if !conn.IsRunning {
+		return conn
+	}
+
+	conn.Port = getPortByProcess("postgres")
+	conn.Uptime = getPostgresUptime()
+
+	stats := getMultiProcessStats("postgres")
+	conn.CPUPerc = fmt.Sprintf("%.1f%%", stats.CPU)
+	conn.MemUsage = fmt.Sprintf("%.1fMB", float64(stats.Memory)/1024.0)
+
+	return conn
 }

@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+// NodeProcess represents a Node.js process
+type NodeProcess struct {
+	PID         string
+	ProjectDir  string
+	ProjectName string
+	Uptime      string
+	CPUPerc     string
+	MemUsage    string
+	Port        string
+}
+
 // CheckNodejs checks if Node.js process is running
 func CheckNodejs() string {
 	cmd := exec.Command("pgrep", "node")
@@ -156,4 +167,108 @@ func getProjectNameFromPackageJson(dir string) string {
 	}
 
 	return pkg.Name
+}
+
+// GetNodeProcesses returns list of Node.js processes
+func GetNodeProcesses() []NodeProcess {
+	cmd := exec.Command("pgrep", "node")
+	output, err := cmd.Output()
+
+	if err != nil {
+		return []NodeProcess{}
+	}
+
+	pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(pids) == 0 {
+		return []NodeProcess{}
+	}
+
+	var processes []NodeProcess
+
+	for _, pid := range pids {
+		pid = strings.TrimSpace(pid)
+		if pid == "" {
+			continue
+		}
+
+		// カレントディレクトリ取得
+		cwdCmd := exec.Command("lsof", "-p", pid)
+		cwdOutput, err := cwdCmd.Output()
+
+		var projectDir string
+		if err == nil {
+			lines := strings.Split(string(cwdOutput), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, " cwd ") {
+					fields := strings.Fields(line)
+					if len(fields) > 0 {
+						projectDir = fields[len(fields)-1]
+						break
+					}
+				}
+			}
+		}
+
+		// 稼働時間取得
+		uptime := getProcessUptime(pid)
+
+		// CPU・メモリ使用量取得
+		stats := getProcessStats(pid)
+
+		// package.json からプロジェクト名取得
+		projectName := ""
+		if projectDir != "" {
+			projectName = getProjectNameFromPackageJson(projectDir)
+		}
+
+		// ポート番号取得
+		port := getProcessPort(pid)
+
+		// プロジェクト名がない場合は、プロジェクトディレクトリ名を使用
+		if projectName == "" && projectDir != "" {
+			projectName = filepath.Base(projectDir)
+		}
+
+		processes = append(processes, NodeProcess{
+			PID:         pid,
+			ProjectDir:  projectDir,
+			ProjectName: projectName,
+			Uptime:      uptime,
+			CPUPerc:     fmt.Sprintf("%.1f%%", stats.CPU),
+			MemUsage:    fmt.Sprintf("%.1fMB", float64(stats.Memory)/1024.0),
+			Port:        port,
+		})
+	}
+
+	return processes
+}
+
+// getProcessPort returns port number for a process
+func getProcessPort(pid string) string {
+	cmd := exec.Command("lsof", "-i", "-P", "-n", "-p", pid)
+	output, err := cmd.Output()
+
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if !strings.Contains(line, "LISTEN") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 9 {
+			continue
+		}
+
+		portInfo := fields[8]
+		if strings.Contains(portInfo, ":") {
+			parts := strings.Split(portInfo, ":")
+			return parts[len(parts)-1]
+		}
+	}
+
+	return ""
 }

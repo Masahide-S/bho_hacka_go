@@ -19,7 +19,19 @@ func (m Model) View() string {
 		return "初期化中..."
 	}
 
-	return m.render2ColumnLayout()
+	mainView := m.render2ColumnLayout()
+
+	// 確認ダイアログを重ねて表示
+	if m.showConfirmDialog {
+		return m.renderWithConfirmDialog(mainView)
+	}
+
+	// ログビューを重ねて表示
+	if m.showLogView {
+		return m.renderWithLogView(mainView)
+	}
+
+	return mainView
 }
 
 // render2ColumnLayout renders the 2-column layout with menu
@@ -120,16 +132,23 @@ func (m Model) renderLeftMenu(width, height int) string {
 
 	menuContent := strings.Join(menuLines, "\n")
 
+	// 左パネルにフォーカスがある場合は枠線色を変更
+	isFocused := m.focusedPanel == "left"
+	boxBorderColor := borderColor
+	if isFocused {
+		boxBorderColor = accentColor
+	}
+
 	// ボックスで囲む
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
+		BorderForeground(boxBorderColor).
 		Width(width).
 		Height(height).
 		Padding(0, 1).
 		Render(menuContent)
 
-	return m.embedTitleInBorder(box, "メニュー")
+	return m.embedTitleInBorder(box, "メニュー", isFocused)
 }
 
 // renderRightDetail renders the right detail panel
@@ -148,18 +167,54 @@ func (m Model) renderRightDetail(width, height int) string {
 	case "service", "info":
 		title = selectedItem.Name
 
-		// キャッシュから取得（即座に表示）
-		if cache, exists := m.serviceCache[selectedItem.Name]; exists {
-			content = cache.Data
-
-			// 更新中の表示
-			if cache.Updating {
-				ageSeconds := int(time.Since(cache.UpdatedAt).Seconds())
-				content += fmt.Sprintf("\n\n更新中... (最終更新: %d秒前)", ageSeconds)
-			}
+		// Dockerの場合は特別処理
+		if selectedItem.Name == "Docker" {
+			content = m.renderDockerContent()
+		} else if selectedItem.Name == "PostgreSQL" {
+			// PostgreSQLの場合は特別処理
+			content = m.renderPostgresContent()
+		} else if selectedItem.Name == "MySQL" {
+			// MySQLの場合は特別処理
+			content = m.renderMySQLContent()
+		} else if selectedItem.Name == "Redis" {
+			// Redisの場合は特別処理
+			content = m.renderRedisContent()
+		} else if selectedItem.Name == "Node.js" {
+			// Node.jsの場合は特別処理
+			content = m.renderNodejsContent()
+		} else if selectedItem.Name == "Python" {
+			// Pythonの場合は特別処理
+			content = m.renderPythonContent()
+		} else if selectedItem.Name == "ポート一覧" {
+			// ポート一覧の場合は特別処理
+			content = m.renderPortsContent()
+		} else if selectedItem.Name == "Top 10 プロセス" {
+			// Top 10 プロセスの場合は特別処理
+			content = m.renderTopProcessesContent()
+		} else if selectedItem.Name == "システムリソース" {
+			// システムリソースの場合は特別処理
+			content = m.renderSystemResourcesDetail()
 		} else {
-			// キャッシュがない場合
-			content = "データ取得中..."
+			// キャッシュから取得（即座に表示）
+			if cache, exists := m.serviceCache[selectedItem.Name]; exists {
+				baseContent := cache.Data
+
+				// 右パネルにフォーカスがあり、選択可能な項目がある場合、強調表示
+				if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+					content = m.renderSelectableContent(baseContent)
+				} else {
+					content = baseContent
+				}
+
+				// 更新中の表示（データが空の場合のみ）
+				if cache.Updating && cache.Data == "" {
+					ageSeconds := int(time.Since(cache.UpdatedAt).Seconds())
+					content = fmt.Sprintf("データ取得中... (%d秒経過)", ageSeconds)
+				}
+			} else {
+				// キャッシュがない場合
+				content = "データ取得中..."
+			}
 		}
 
 	default:
@@ -167,8 +222,11 @@ func (m Model) renderRightDetail(width, height int) string {
 		content = "左のメニューから項目を選択してください"
 	}
 
-	return m.createBox(title, content, width, height)
+	// 右パネルにフォーカスがある場合は枠線色を変更
+	isFocused := m.focusedPanel == "right"
+	return m.createBox(title, content, width, height, isFocused)
 }
+
 
 // renderAIAnalysis renders AI analysis result
 func (m Model) renderAIAnalysis() string {
@@ -306,7 +364,7 @@ func (m Model) renderSystemResources() string {
 }
 
 // createBox creates a box with title embedded in border
-func (m Model) createBox(title, content string, width, height int) string {
+func (m Model) createBox(title, content string, width, height int, isFocused bool) string {
 	// コンテンツをスタイリング
 	styledContent := styleContent(content)
 
@@ -314,9 +372,21 @@ func (m Model) createBox(title, content string, width, height int) string {
 	contentLines := strings.Split(styledContent, "\n")
 	maxContentLines := height - 4
 
+	// スクロール処理（右パネルにフォーカスがある場合のみ）
+	startLine := 0
+	if isFocused && m.focusedPanel == "right" {
+		startLine = m.detailScroll
+	}
+
+	// スクロール位置から表示
+	if startLine < len(contentLines) {
+		contentLines = contentLines[startLine:]
+	}
+
+	showScrollIndicator := false
 	if len(contentLines) > maxContentLines {
 		contentLines = contentLines[:maxContentLines]
-		contentLines = append(contentLines, CommentStyle.Render("... (続く)"))
+		showScrollIndicator = true
 	}
 
 	// 足りない行を空行で埋める
@@ -324,23 +394,36 @@ func (m Model) createBox(title, content string, width, height int) string {
 		contentLines = append(contentLines, "")
 	}
 
+	// スクロールインジケーターを追加
+	if showScrollIndicator {
+		if len(contentLines) > 0 {
+			contentLines[len(contentLines)-1] = CommentStyle.Render("... (Ctrl+D/U: スクロール)")
+		}
+	}
+
 	adjustedContent := strings.Join(contentLines, "\n")
+
+	// フォーカス時の枠線色を変更
+	boxBorderColor := borderColor
+	if isFocused {
+		boxBorderColor = accentColor
+	}
 
 	// ボックス作成
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
+		BorderForeground(boxBorderColor).
 		Width(width).
 		Height(height).
 		Padding(0, 1).
 		Render(adjustedContent)
 
 	// タイトルを上部ボーダーに埋め込む
-	return m.embedTitleInBorder(box, title)
+	return m.embedTitleInBorder(box, title, isFocused)
 }
 
 // embedTitleInBorder embeds title into the top border
-func (m Model) embedTitleInBorder(box, title string) string {
+func (m Model) embedTitleInBorder(box, title string, isFocused bool) string {
 	lines := strings.Split(box, "\n")
 	if len(lines) < 1 {
 		return box
@@ -352,7 +435,13 @@ func (m Model) embedTitleInBorder(box, title string) string {
 	titleWidth := lipgloss.Width(formattedTitle)
 
 	if titleWidth < actualWidth-4 {
-		borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+		// フォーカス時は枠線色を変更
+		boxBorderColor := borderColor
+		if isFocused {
+			boxBorderColor = accentColor
+		}
+
+		borderStyle := lipgloss.NewStyle().Foreground(boxBorderColor)
 
 		leftCorner := borderStyle.Render("╭")
 		rightCorner := borderStyle.Render("╮")
@@ -394,8 +483,91 @@ func (m Model) renderHeader() string {
 	)
 }
 
+
 // renderFooter renders the footer
 func (m Model) renderFooter() string {
+	if m.showConfirmDialog {
+		return HelpStyle.Render("Y: はい | N: いいえ")
+	}
+
+	if m.focusedPanel == "left" {
+		return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | l/→: 詳細へ")
+	} else {
+		if len(m.rightPanelItems) > 0 {
+			// 選択されたサービスに応じてヘルプメッセージを変更
+			selectedItem := m.menuItems[m.selectedItem]
+			if selectedItem.Name == "Docker" {
+				isCompose := m.isSelectedContainerCompose()
+
+				// 起動/停止のラベルを動的に決定
+				startStopText := "s: 起動/停止"
+				if m.rightPanelCursor < len(m.rightPanelItems) {
+					item := m.rightPanelItems[m.rightPanelCursor]
+					if item.Type == "project" {
+						// プロジェクト全体の場合、コンテナの状態を確認
+						containers := m.cachedContainers
+						runningCount := 0
+						totalCount := 0
+						for _, c := range containers {
+							if c.ComposeProject == item.Name {
+								totalCount++
+								if c.Status == "running" {
+									runningCount++
+								}
+							}
+						}
+						if runningCount > 0 && runningCount == totalCount {
+							startStopText = "s: 停止"
+						} else {
+							startStopText = "s: 起動"
+						}
+					} else if item.Type == "container" {
+						// 個別コンテナの場合
+						container := m.getSelectedContainer()
+						if container != nil {
+							if container.Status == "running" {
+								startStopText = "s: 停止"
+							} else {
+								startStopText = "s: 起動"
+							}
+						}
+					}
+				}
+
+				if isCompose {
+					// Composeコンテナ: すべてのコマンドが使える
+					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | " + startStopText + " | r: 再起動 | b: リビルド | d: 削除 | c: クリーン | L: ログ | o: VSCodeで開く")
+				} else {
+					// 単体コンテナ: リビルドは使えない
+					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | " + startStopText + " | r: 再起動 | d: 削除 | c: クリーン | L: ログ | o: VSCodeで開く")
+				}
+			} else if selectedItem.Name == "PostgreSQL" {
+				// PostgreSQLの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | v: VACUUM | a: ANALYZE")
+			} else if selectedItem.Name == "Node.js" {
+				// Node.jsの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | L: ログ | o: VSCodeで開く")
+			} else if selectedItem.Name == "MySQL" {
+				// MySQLの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | o: 最適化")
+			} else if selectedItem.Name == "Redis" {
+				// Redisの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | f: FLUSHDB")
+			} else if selectedItem.Name == "Python" {
+				// Pythonの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | L: ログ | o: VSCodeで開く")
+			} else if selectedItem.Name == "ポート一覧" {
+				// ポート一覧の場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")
+			} else if selectedItem.Name == "Top 10 プロセス" {
+				// Top 10 プロセスの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")
+			}
+			return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール")
+		} else {
+			return HelpStyle.Render("q: 終了 | h/←: 戻る")
+		}
+	}
 	// AI分析選択中の場合、追加のヘルプを表示
 	selectedItem := m.menuItems[m.selectedItem]
 	if selectedItem.Type == "ai" && len(m.availableModels) > 1 {
@@ -404,10 +576,21 @@ func (m Model) renderFooter() string {
 	return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行")
 }
 
+
 // wrapWithHeaderFooter adds header, footer, and outer border
 func (m Model) wrapWithHeaderFooter(content string) string {
 	header := m.renderHeader()
 	footer := m.renderFooter()
+
+	// コマンド実行結果がある場合は表示
+	var commandResult string
+	if m.lastCommandResult != "" {
+		if strings.Contains(m.lastCommandResult, "成功") || strings.Contains(m.lastCommandResult, "しました") {
+			commandResult = SuccessStyle.Render("✓ " + m.lastCommandResult)
+		} else {
+			commandResult = ErrorStyle.Render("✗ " + m.lastCommandResult)
+		}
+	}
 
 	innerContent := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -415,6 +598,7 @@ func (m Model) wrapWithHeaderFooter(content string) string {
 		"",
 		content,
 		"",
+		commandResult,
 		footer,
 	)
 

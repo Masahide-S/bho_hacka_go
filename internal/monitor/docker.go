@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// DockerContainer represents a Docker container
+type DockerContainer struct {
+	ID             string
+	Name           string
+	Status         string
+	Image          string
+	ComposeProject string // Composeプロジェクト名（空の場合は単体）
+	ComposeService string // Composeサービス名
+	ProjectDir     string // プロジェクトディレクトリ（Composeの場合はdocker-compose.ymlのあるディレクトリ）
+	Port           string // 公開されているポート番号
+}
+
 // CheckDocker checks if Docker is running and counts containers
 func CheckDocker() string {
 	cmd := exec.Command("docker", "ps", "-q")
@@ -66,10 +78,10 @@ func getDockerContainerDetails() []string {
 			portInfo := extractMainPort(ports)
 
 			// CPU・メモリ使用量取得
-			stats := getDockerContainerStats(containerID)
+			stats := GetDockerContainerStats(containerID)
 
 			// イメージサイズ取得
-			imageSize := getDockerImageSize(image)
+			imageSize := GetDockerImageSize(image)
 
 			// 基本情報
 			containerInfo := fmt.Sprintf("  - %s [%s] | %s", name, portInfo, status)
@@ -108,8 +120,8 @@ func getDockerContainerDetails() []string {
 	return containers
 }
 
-// getDockerImageSize returns the size of a Docker image
-func getDockerImageSize(imageName string) string {
+// GetDockerImageSize returns the size of a Docker image
+func GetDockerImageSize(imageName string) string {
 	cmd := exec.Command("docker", "images", imageName, "--format", "{{.Size}}")
 	output, err := cmd.Output()
 
@@ -126,8 +138,8 @@ type DockerStats struct {
 	MemUsage string
 }
 
-// getDockerContainerStats returns CPU and memory stats for a container
-func getDockerContainerStats(containerID string) DockerStats {
+// GetDockerContainerStats returns CPU and memory stats for a container
+func GetDockerContainerStats(containerID string) DockerStats {
 	cmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", containerID)
 	output, err := cmd.Output()
 
@@ -253,4 +265,222 @@ func extractMainPort(ports string) string {
 	}
 
 	return ports
+}
+
+// GetDockerContainers returns list of all Docker containers (simple version)
+func GetDockerContainers() []DockerContainer {
+	cmd := exec.Command("docker", "ps", "-a", "--format", "{{.ID}}|{{.Names}}|{{.Status}}|{{.Image}}")
+	output, err := cmd.Output()
+
+	if err != nil {
+		return []DockerContainer{}
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var containers []DockerContainer
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) < 4 {
+			continue
+		}
+
+		status := "exited"
+		if strings.Contains(parts[2], "Up") {
+			status = "running"
+		}
+
+		containerID := parts[0]
+
+		// Compose情報を取得（軽量版）
+		composeProject, composeService := getComposeInfo(containerID)
+
+		// プロジェクトディレクトリを取得（Composeの場合）
+		projectDir := ""
+		if composeProject != "" {
+			projectDir = getContainerProjectDir(containerID)
+		}
+
+		// ポート情報を取得
+		port := getContainerPort(containerID)
+
+		containers = append(containers, DockerContainer{
+			ID:             containerID,
+			Name:           parts[1],
+			Status:         status,
+			Image:          parts[3],
+			ComposeProject: composeProject,
+			ComposeService: composeService,
+			ProjectDir:     projectDir,
+			Port:           port,
+		})
+	}
+
+	return containers
+}
+
+// getComposeInfo returns compose project and service for a container (lightweight)
+func getComposeInfo(containerID string) (project, service string) {
+	// Composeプロジェクト名を取得
+	cmd := exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project\"}}")
+	output, err := cmd.Output()
+	if err == nil {
+		project = strings.TrimSpace(string(output))
+		if project == "<no value>" {
+			project = ""
+		}
+	}
+
+	// Composeサービス名を取得
+	cmd = exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.service\"}}")
+	output, err = cmd.Output()
+	if err == nil {
+		service = strings.TrimSpace(string(output))
+		if service == "<no value>" {
+			service = ""
+		}
+	}
+
+	return project, service
+}
+
+// IsComposeContainer checks if a container is part of a compose project
+func IsComposeContainer(container DockerContainer) bool {
+	return container.ComposeProject != ""
+}
+
+// getContainerProjectDir returns the project directory for a compose container
+func getContainerProjectDir(containerID string) string {
+	cmd := exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	workDir := strings.TrimSpace(string(output))
+	if workDir == "" || workDir == "<no value>" {
+		return ""
+	}
+
+	return workDir
+}
+
+// getContainerPort returns the exposed port for a container
+func getContainerPort(containerID string) string {
+	cmd := exec.Command("docker", "port", containerID)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return ""
+	}
+
+	// 最初のポートマッピングを取得（例: "3000/tcp -> 0.0.0.0:3000"）
+	firstLine := lines[0]
+	if strings.Contains(firstLine, "->") {
+		parts := strings.Split(firstLine, "->")
+		if len(parts) >= 2 {
+			portPart := strings.TrimSpace(parts[1])
+			// "0.0.0.0:3000" から "3000" を抽出
+			if strings.Contains(portPart, ":") {
+				portNum := strings.Split(portPart, ":")[1]
+				return portNum
+			}
+		}
+	}
+
+	return ""
+}
+
+// GetDanglingImagesCount returns the count of dangling images
+func GetDanglingImagesCount() int {
+	// docker images -f "dangling=true" -q | wc -l
+	cmd := exec.Command("sh", "-c", "docker images -f \"dangling=true\" -q | wc -l")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	countStr := strings.TrimSpace(string(output))
+	count := 0
+	fmt.Sscanf(countStr, "%d", &count)
+	return count
+}
+
+// GetDanglingImagesSize returns the total size of dangling images
+func GetDanglingImagesSize() string {
+	// docker images -f "dangling=true" --format "{{.Size}}"
+	cmd := exec.Command("docker", "images", "-f", "dangling=true", "--format", "{{.Size}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return "0B"
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return "0B"
+	}
+
+	// サイズの合計を計算（単純化のため、最初の画像のサイズを返す）
+	// 実際の合計計算は複雑なので、概算として全体をカウント
+	totalBytes := int64(0)
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		// サイズ文字列をバイトに変換
+		bytes := parseSizeString(line)
+		totalBytes += bytes
+	}
+
+	return formatBytes(totalBytes)
+}
+
+// parseSizeString converts size string like "1.5GB" to bytes
+func parseSizeString(sizeStr string) int64 {
+	sizeStr = strings.TrimSpace(sizeStr)
+	if sizeStr == "" {
+		return 0
+	}
+
+	var value float64
+	var unit string
+	fmt.Sscanf(sizeStr, "%f%s", &value, &unit)
+
+	switch strings.ToUpper(unit) {
+	case "B":
+		return int64(value)
+	case "KB":
+		return int64(value * 1024)
+	case "MB":
+		return int64(value * 1024 * 1024)
+	case "GB":
+		return int64(value * 1024 * 1024 * 1024)
+	case "TB":
+		return int64(value * 1024 * 1024 * 1024 * 1024)
+	default:
+		return 0
+	}
+}
+
+// formatBytes converts bytes to human-readable format
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	return fmt.Sprintf("%.1f%s", float64(bytes)/float64(div), units[exp])
 }
