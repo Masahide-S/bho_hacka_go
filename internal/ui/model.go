@@ -36,6 +36,12 @@ type portsDataMsg struct {
 	UpdatedAt time.Time
 }
 
+// topProcessesDataMsg is sent when top processes data is fetched
+type topProcessesDataMsg struct {
+	Processes []monitor.ProcessInfo
+	UpdatedAt time.Time
+}
+
 // MenuItem represents an item in the left menu
 type MenuItem struct {
 	Name     string
@@ -46,10 +52,11 @@ type MenuItem struct {
 
 // RightPanelItem represents an item in the right panel
 type RightPanelItem struct {
-	Type        string // "project" or "container"
+	Type        string // "project", "container", "port", "process_item"
 	Name        string
 	ProjectName string // プロジェクト名（コンテナの場合）
 	ContainerID string // コンテナの場合のID
+	ProcessPID  string // プロセスの場合のPID
 	IsExpanded  bool   // プロジェクトが展開されているか
 }
 
@@ -95,6 +102,7 @@ type Model struct {
 	cachedPythonProcesses   []monitor.PythonProcess         // Pythonプロセスのキャッシュ
 	cachedPorts             []monitor.PortInfo              // ポート一覧のキャッシュ
 	cachedPortsUpdatedAt    time.Time                       // ポート一覧の最終更新時刻
+	cachedTopProcesses      []monitor.ProcessInfo           // Top 10プロセスのキャッシュ
 	tickCount               int
 
 	// Right panel navigation
@@ -133,6 +141,7 @@ func InitialModel() Model {
 			{Name: "Python", Type: "service", Status: "✗"},
 			{Name: "────────────", Type: "separator", Status: ""},
 			{Name: "ポート一覧", Type: "info", Status: ""},
+			{Name: "Top 10 プロセス", Type: "info", Status: ""},
 			{Name: "システムリソース", Type: "info", Status: ""},
 		},
 		aiIssueCount:        0,
@@ -145,6 +154,7 @@ func InitialModel() Model {
 		cachedRedisDatabases:    []monitor.RedisDatabase{},
 		cachedNodeProcesses:     []monitor.NodeProcess{},
 		cachedPythonProcesses:   []monitor.PythonProcess{},
+		cachedTopProcesses:      []monitor.ProcessInfo{},
 		tickCount:               0,
 		focusedPanel:        "left",
 		rightPanelCursor:    0,
@@ -333,6 +343,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.handlePythonProcessKill()
 				} else if selectedItem.Name == "ポート一覧" {
 					return m.handlePortKill()
+				} else if selectedItem.Name == "Top 10 プロセス" {
+					return m.handleTopProcessKill()
 				}
 			}
 
@@ -348,6 +360,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.handlePythonProcessForceKill()
 				} else if selectedItem.Name == "ポート一覧" {
 					return m.handlePortForceKill()
+				} else if selectedItem.Name == "Top 10 プロセス" {
+					return m.handleTopProcessForceKill()
 				}
 			}
 
@@ -529,6 +543,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// ポート一覧: 3秒ごと（選択中、高速更新）
 			if selectedItem.Name == "ポート一覧" && m.tickCount%3 == 0 {
 				cmds = append(cmds, m.fetchPortsDataCmd())
+			} else if selectedItem.Name == "Top 10 プロセス" && m.tickCount%3 == 0 {
+				// Top 10 プロセス: 3秒ごと（選択中、高速更新）
+				cmds = append(cmds, m.fetchTopProcessesDataCmd())
 			} else if m.tickCount%5 == 0 {
 				// その他のinfo: 5秒ごと
 				cmds = append(cmds, m.fetchSelectedServiceCmd())
@@ -623,6 +640,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ポート一覧パネルが選択されている場合のみ右パネルを更新
 		selectedItem := m.menuItems[m.selectedItem]
 		if selectedItem.Name == "ポート一覧" {
+			m = m.updateRightPanelItems()
+		}
+
+		return m, nil
+
+	case topProcessesDataMsg:
+		// Top 10 プロセスのキャッシュを更新
+		m.cachedTopProcesses = msg.Processes
+
+		// Top 10 プロセスパネルが選択されている場合のみ右パネルを更新
+		selectedItem := m.menuItems[m.selectedItem]
+		if selectedItem.Name == "Top 10 プロセス" {
 			m = m.updateRightPanelItems()
 		}
 
@@ -986,6 +1015,20 @@ func (m Model) updateRightPanelItems() Model {
 			})
 		}
 
+	case "Top 10 プロセス":
+		// Top 10 プロセスを取得
+		processes := monitor.GetTopProcesses(10)
+		m.cachedTopProcesses = processes
+
+		// プロセスを追加
+		for _, proc := range processes {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type:       "process_item",
+				Name:       proc.Name,
+				ProcessPID: proc.PID,
+			})
+		}
+
 	default:
 		// その他は選択不可
 		m.rightPanelItems = []RightPanelItem{}
@@ -1262,6 +1305,13 @@ func executeCommandCmd(target, action, targetType string) tea.Cmd {
 			result = monitor.ExecutePythonCommand(target, action)
 		} else if targetType == "port" {
 			result = monitor.ExecutePortCommand(target, action)
+		} else if targetType == "top_process" {
+			// Top 10 プロセスの操作
+			if action == "kill_top_process" {
+				result = monitor.ExecutePortCommand(target, "kill_port")
+			} else if action == "force_kill_top_process" {
+				result = monitor.ExecutePortCommand(target, "force_kill_port")
+			}
 		} else if targetType == "docker_system" {
 			if action == "clean_dangling" {
 				result = monitor.CleanDanglingImages()
@@ -1331,6 +1381,18 @@ func (m Model) fetchPortsDataCmd() tea.Cmd {
 
 		return portsDataMsg{
 			Ports:     ports,
+			UpdatedAt: time.Now(),
+		}
+	}
+}
+
+// fetchTopProcessesDataCmd fetches top processes data
+func (m Model) fetchTopProcessesDataCmd() tea.Cmd {
+	return func() tea.Msg {
+		processes := monitor.GetTopProcesses(10)
+
+		return topProcessesDataMsg{
+			Processes: processes,
 			UpdatedAt: time.Now(),
 		}
 	}

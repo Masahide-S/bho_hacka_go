@@ -176,6 +176,9 @@ func (m Model) renderRightDetail(width, height int) string {
 		} else if selectedItem.Name == "ポート一覧" {
 			// ポート一覧の場合は特別処理
 			content = m.renderPortsContent()
+		} else if selectedItem.Name == "Top 10 プロセス" {
+			// Top 10 プロセスの場合は特別処理
+			content = m.renderTopProcessesContent()
 		} else if selectedItem.Name == "システムリソース" {
 			// システムリソースの場合は特別処理
 			content = m.renderSystemResourcesDetail()
@@ -488,6 +491,9 @@ func (m Model) renderFooter() string {
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | L: ログ | o: VSCodeで開く")
 			} else if selectedItem.Name == "ポート一覧" {
 				// ポート一覧の場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")
+			} else if selectedItem.Name == "Top 10 プロセス" {
+				// Top 10 プロセスの場合
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")
 			}
 			return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール")

@@ -24,15 +24,11 @@ type SystemResources struct {
 	MemoryAvailable  int64   // 使用可能 (MB)
 	MemoryPerc       float64 // 使用率 (%)
 
-	// ストレージ情報
-	StorageTotal int64   // 総容量 (GB)
-	StorageUsed  int64   // 使用量 (GB)
-	StorageFree  int64   // 空き容量 (GB)
-	StoragePerc  float64 // 使用率 (%)
-
-	// ディスク情報（追加）
-	DiskUsage float64 // ディスク使用率 (%)
-	DiskFree  int64   // ディスク空き容量 (GB)
+	// ディスク情報
+	DiskTotal int64   // 総容量 (GB)
+	DiskUsed  int64   // 使用量 (GB)
+	DiskFree  int64   // 空き容量 (GB)
+	DiskPerc  float64 // 使用率 (%)
 
 	// その他の情報
 	ProcessCount int    // プロセス数
@@ -42,8 +38,7 @@ type SystemResources struct {
 // GetSystemResources returns current system resource usage
 func GetSystemResources() SystemResources {
 	memStats := getDetailedMemoryStats()
-	storageStats := getStorageStats()
-	diskUsage, diskFree := getDiskUsage()
+	diskStats := getDiskStats()
 
 	return SystemResources{
 		// CPU
@@ -60,15 +55,11 @@ func GetSystemResources() SystemResources {
 		MemoryAvailable:  memStats.Available,
 		MemoryPerc:       memStats.UsedPerc,
 
-		// ストレージ
-		StorageTotal: storageStats.Total,
-		StorageUsed:  storageStats.Used,
-		StorageFree:  storageStats.Free,
-		StoragePerc:  storageStats.UsedPerc,
-
 		// ディスク
-		DiskUsage: diskUsage,
-		DiskFree:  diskFree,
+		DiskTotal: diskStats.Total,
+		DiskUsed:  diskStats.Used,
+		DiskFree:  diskStats.Free,
+		DiskPerc:  diskStats.UsedPerc,
 
 		// その他
 		ProcessCount: getProcessCount(),
@@ -174,7 +165,7 @@ func FormatSystemResources(sr SystemResources) string {
 		float64(sr.MemoryUsed)/1024.0,
 		float64(sr.MemoryTotal)/1024.0,
 		sr.MemoryPerc,
-		sr.DiskUsage,
+		sr.DiskPerc,
 		sr.DiskFree,
 	)
 }
@@ -266,31 +257,31 @@ func getDetailedMemoryStats() MemoryStats {
 	}
 }
 
-// StorageStats holds storage statistics
-type StorageStats struct {
+// DiskStats holds disk statistics
+type DiskStats struct {
 	Total    int64
 	Used     int64
 	Free     int64
 	UsedPerc float64
 }
 
-// getStorageStats returns storage statistics
-func getStorageStats() StorageStats {
+// getDiskStats returns disk statistics
+func getDiskStats() DiskStats {
 	// df -h / でルートパーティションの情報を取得
 	cmd := exec.Command("df", "-g", "/")
 	output, err := cmd.Output()
 	if err != nil {
-		return StorageStats{}
+		return DiskStats{}
 	}
 
 	lines := strings.Split(string(output), "\n")
 	if len(lines) < 2 {
-		return StorageStats{}
+		return DiskStats{}
 	}
 
 	fields := strings.Fields(lines[1])
 	if len(fields) < 5 {
-		return StorageStats{}
+		return DiskStats{}
 	}
 
 	// GB単位で取得
@@ -303,7 +294,7 @@ func getStorageStats() StorageStats {
 		usedPerc = (float64(used) / float64(total)) * 100
 	}
 
-	return StorageStats{
+	return DiskStats{
 		Total:    total,
 		Used:     used,
 		Free:     free,

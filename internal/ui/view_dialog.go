@@ -137,6 +137,38 @@ PID: %s
 
 [Y] はい
 [N] いいえ`, actionJP, actionDetail, projectName, port.PID, port.Port)
+	} else if m.confirmType == "top_process" {
+		// Top 10 プロセスの操作（プロセス停止）
+		process := m.getSelectedTopProcess()
+		if process == nil {
+			return mainView
+		}
+
+		actionJP := ""
+		actionDetail := ""
+		switch m.confirmAction {
+		case "kill_top_process":
+			actionJP = "停止"
+			actionDetail = "このプロセスを停止します"
+		case "force_kill_top_process":
+			actionJP = "強制停止"
+			actionDetail = "⚠ このプロセスを強制停止します（SIGKILL）"
+		}
+
+		processType := getProcessTypeText(process.IsDevTool)
+
+		dialogContent = fmt.Sprintf(`プロセスを %s しますか？
+
+%s
+
+プロセス名: %s
+PID: %s
+CPU: %.1f%%
+メモリ: %dMB
+種類: %s
+
+[Y] はい
+[N] いいえ`, actionJP, actionDetail, process.Name, process.PID, process.CPU, process.Memory, processType)
 	} else if m.confirmType == "database" {
 		// PostgreSQLデータベースの操作
 		actionJP := ""

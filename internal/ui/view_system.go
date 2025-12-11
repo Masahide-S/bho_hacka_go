@@ -34,15 +34,15 @@ func (m Model) renderSystemResourcesDetail() string {
 		float64(sr.MemoryAvailable)/1024.0,
 	)
 
-	// ストレージ情報
-	storageSection := fmt.Sprintf(`
-ストレージ使用状況:
+	// ディスク情報
+	diskSection := fmt.Sprintf(`
+ディスク使用状況:
   使用中: %dGB / %dGB (%.1f%%)
   空き容量: %dGB`,
-		sr.StorageUsed,
-		sr.StorageTotal,
-		sr.StoragePerc,
-		sr.StorageFree,
+		sr.DiskUsed,
+		sr.DiskTotal,
+		sr.DiskPerc,
+		sr.DiskFree,
 	)
 
 	// その他の情報
@@ -54,5 +54,5 @@ func (m Model) renderSystemResourcesDetail() string {
 		sr.Uptime,
 	)
 
-	return cpuSection + memorySection + storageSection + otherSection
+	return cpuSection + memorySection + diskSection + otherSection
 }
