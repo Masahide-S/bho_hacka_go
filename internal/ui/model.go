@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Masahide-S/bho_hacka_go/internal/ai"
+	"github.com/Masahide-S/bho_hacka_go/internal/db"
 	"github.com/Masahide-S/bho_hacka_go/internal/llm"
 	"github.com/Masahide-S/bho_hacka_go/internal/logger"
 	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
@@ -147,6 +148,11 @@ type Model struct {
 	ollamaAvailable bool
 	availableModels []string
 	selectedModel   int // モデル選択インデックス
+
+	// --- DB関連フィールド ---
+	dbStore    *db.Store
+	dbChan     chan monitor.FullSnapshot // 書き込み用キュー
+	lastDBSave time.Time                 // 保存間隔制御用
 }
 
 
@@ -203,9 +209,14 @@ type serviceStatusResultMsg struct {
 var cmdRegex = regexp.MustCompile(`<cmd>(.*?)</cmd>`)
 
 
-// InitialModel returns the initial model
+// InitialModel returns the initial model (for backward compatibility)
 func InitialModel() Model {
-	return Model{
+	return InitialModelWithStore(nil)
+}
+
+// InitialModelWithStore returns the initial model with database store
+func InitialModelWithStore(store *db.Store) Model {
+	m := Model{
 		lastUpdate:   time.Now(),
 		selectedItem: 0,
 		menuItems: []MenuItem{
@@ -222,39 +233,59 @@ func InitialModel() Model {
 			{Name: "Top 10 プロセス", Type: "info", Status: ""},
 			{Name: "システムリソース", Type: "info", Status: ""},
 		},
-		aiIssueCount:        0,
-		systemResources:         monitor.GetSystemResources(),
-		serviceCache:            make(map[string]*ServiceCache),
-		containerStatsCache:     make(map[string]*ContainerStatsCache),
-		cachedContainers:        []monitor.DockerContainer{},
+		aiIssueCount:           0,
+		systemResources:        monitor.GetSystemResources(),
+		serviceCache:           make(map[string]*ServiceCache),
+		containerStatsCache:    make(map[string]*ContainerStatsCache),
+		cachedContainers:       []monitor.DockerContainer{},
 		cachedPostgresDatabases: []monitor.PostgresDatabase{},
-		cachedMySQLDatabases:    []monitor.MySQLDatabase{},
-		cachedRedisDatabases:    []monitor.RedisDatabase{},
-		cachedNodeProcesses:     []monitor.NodeProcess{},
-		cachedPythonProcesses:   []monitor.PythonProcess{},
-		cachedTopProcesses:      []monitor.ProcessInfo{},
-		tickCount:               0,
-		focusedPanel:        "left",
-		rightPanelCursor:    0,
-		rightPanelItems:     []RightPanelItem{},
-		detailScroll:        0,
-		showConfirmDialog: false,
-		confirmAction:     "",
-		confirmTarget:     "",
-		confirmType:       "",
-		lastCommandResult: "",
-		showLogView:       false,
-		logContent:        "",
-		logScroll:         0,
-		logTargetName:     "",
-    aiService:       ai.NewService(),
-		aiState:         aiStateIdle,
-		aiPendingCmd:    "",
-		aiCmdResult:     "",
-		ollamaAvailable: false,
-		availableModels: []string{},
-		selectedModel:   0,
+		cachedMySQLDatabases:   []monitor.MySQLDatabase{},
+		cachedRedisDatabases:   []monitor.RedisDatabase{},
+		cachedNodeProcesses:    []monitor.NodeProcess{},
+		cachedPythonProcesses:  []monitor.PythonProcess{},
+		cachedTopProcesses:     []monitor.ProcessInfo{},
+		tickCount:              0,
+		focusedPanel:           "left",
+		rightPanelCursor:       0,
+		rightPanelItems:        []RightPanelItem{},
+		detailScroll:           0,
+		showConfirmDialog:      false,
+		confirmAction:          "",
+		confirmTarget:          "",
+		confirmType:            "",
+		lastCommandResult:      "",
+		showLogView:            false,
+		logContent:             "",
+		logScroll:              0,
+		logTargetName:          "",
+		aiService:              ai.NewService(),
+		aiState:                aiStateIdle,
+		aiPendingCmd:           "",
+		aiCmdResult:            "",
+		ollamaAvailable:        false,
+		availableModels:        []string{},
+		selectedModel:          0,
+		dbStore:                store,
+		dbChan:                 make(chan monitor.FullSnapshot, 50), // バッファを持たせる
+	}
 
+	// 裏方（DBワーカー）を始動
+	go m.startDBWorker()
+
+	return m
+}
+
+// startDBWorker はチャネルからデータを取り出し、UIをブロックせずにDBへ書く
+func (m Model) startDBWorker() {
+	if m.dbStore == nil {
+		return
+	}
+	for snapshot := range m.dbChan {
+		// Store.SaveSnapshot メソッドを呼び出す
+		err := m.dbStore.SaveSnapshot(snapshot.System, snapshot.Processes)
+		if err != nil {
+			logger.LogIssue("DB_WRITE_ERROR", err.Error())
+		}
 	}
 }
 
@@ -736,6 +767,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 2秒ごと: システムリソース更新
 		if m.tickCount%2 == 0 {
 			m.systemResources = monitor.GetSystemResources()
+
+			// 【賢い保存ロジック】
+			// 毎回全プロセスを保存すると重いので、以下の条件でのみ詳細(Top 5)を取得して保存
+			// 条件: CPU負荷が高い(>50%) または 30秒に1回の定期保存
+			shouldSaveDetails := m.systemResources.CPUUsage > 50.0 || time.Since(m.lastDBSave) > 30*time.Second
+
+			var processesToSave []monitor.ProcessInfo
+			if shouldSaveDetails {
+				// 詳細分析用にTop 5プロセスを取得
+				processesToSave = monitor.GetTopProcesses(5)
+				m.lastDBSave = time.Now()
+			} else {
+				// 通常時は空リスト（親テーブルのメトリクスのみ保存される）
+				processesToSave = []monitor.ProcessInfo{}
+			}
+
+			// 非同期チャネルへ送信（selectでブロック回避）
+			if m.dbStore != nil {
+				snapshot := monitor.FullSnapshot{
+					System:    m.systemResources,
+					Processes: processesToSave,
+				}
+
+				select {
+				case m.dbChan <- snapshot:
+					// 送信成功
+				default:
+					// バッファがいっぱいなら今回は諦める（UI操作を優先）
+					logger.LogIssue("DB_SKIP", "Metrics channel full")
+				}
+			}
 		}
 
 		// 選択中のサービスを優先更新
@@ -1684,10 +1746,15 @@ func fetchPostgresConnectionCmd() tea.Cmd {
 	}
 }
 
-// Run starts the TUI
+// Run starts the TUI (for backward compatibility)
 func Run() error {
+	return RunWithStore(nil)
+}
+
+// RunWithStore starts the TUI with database store
+func RunWithStore(store *db.Store) error {
 	p := tea.NewProgram(
-		InitialModel(),
+		InitialModelWithStore(store),
 		tea.WithAltScreen(),
 	)
 	_, err := p.Run()
