@@ -82,13 +82,25 @@ func (m Model) renderLeftMenu(width, height int) string {
 
 		// AI項目の特別表示
 		if item.Type == "ai" {
+			// Ollama接続状態のマーク
+			statusMark := " ●" // デフォルト（未確認）
+			statusStyle := InfoStyle
+
+			if m.ollamaAvailable {
+				statusMark = " ✓"
+				statusStyle = SuccessStyle
+			} else {
+				statusMark = " ✗"
+				statusStyle = ErrorStyle
+			}
+
 			issueText := ""
 			if m.aiIssueCount > 0 {
 				issueText = WarningStyle.Render(fmt.Sprintf(" [%d件]", m.aiIssueCount))
 			}
-			
-			line := cursor + item.Name + issueText
-			
+
+			line := cursor + item.Name + statusStyle.Render(statusMark) + issueText
+
 			if i == m.selectedItem {
 				line = HighlightStyle.Render(line)
 			}
@@ -218,42 +230,97 @@ func (m Model) renderRightDetail(width, height int) string {
 
 // renderAIAnalysis renders AI analysis result
 func (m Model) renderAIAnalysis() string {
-	if m.aiIssueCount == 0 {
-		return `AI Assistant
+	// ヘッダー部分：モデル情報と接続状態
+	header := m.renderAIHeader()
 
-✓ すべて正常です
+	switch m.aiState {
+	case aiStateLoading:
+		// ストリーミング中は既に受信した内容を表示
+		if m.aiResponse != "" {
+			return header + "\n\n" + m.aiResponse + "\n\n" + InfoStyle.Render("生成中...")
+		}
+		return header + "\n\n" + `環境を分析中...
 
-監視状況:
-  ✓ 全サービス正常稼働
-  ✓ ポート衝突なし
-  ✓ リソース使用量: 正常範囲
+Ollamaが環境情報を読み取っています。
+しばらくお待ちください。`
 
-[a] 環境全体を分析`
+	case aiStateSuccess:
+		baseContent := header + "\n\n" + m.aiResponse
+
+		// コマンド実行待ちの場合のプロンプト表示
+		if m.aiPendingCmd != "" {
+			prompt := fmt.Sprintf(`
+
+────────────────────────────────────────
+🤖 AIがアクションを提案しています:
+
+  $ %s
+
+[Enter] 実行する    [Esc] キャンセル
+────────────────────────────────────────`, m.aiPendingCmd)
+			baseContent += WarningStyle.Render(prompt)
+		}
+
+		// 実行結果の表示
+		if m.aiCmdResult != "" {
+			resultStyle := InfoStyle
+			if len(m.aiCmdResult) > 0 && m.aiCmdResult[0] == 226 { // '✗' のUTF-8先頭バイト
+				resultStyle = ErrorStyle
+			} else if len(m.aiCmdResult) > 0 && m.aiCmdResult[0] == 226 { // '✓' のUTF-8先頭バイト
+				resultStyle = SuccessStyle
+			}
+			// 文字列で判定
+			if strings.HasPrefix(m.aiCmdResult, "✗") {
+				resultStyle = ErrorStyle
+			} else if strings.HasPrefix(m.aiCmdResult, "✓") {
+				resultStyle = SuccessStyle
+			}
+
+			baseContent += "\n\n" + resultStyle.Render(m.aiCmdResult)
+		}
+
+		baseContent += "\n\n[a] 再分析"
+		return baseContent
+
+	case aiStateError:
+		return header + fmt.Sprintf(`
+
+エラーが発生しました:
+%s
+
+[a] 再試行`, m.aiResponse)
+
+	default: // aiStateIdle
+		return header + `
+
+環境分析の準備ができています。
+
+[a] キーを押して環境全体を分析`
+	}
+}
+
+// renderAIHeader はAI画面のヘッダー情報を生成します
+func (m Model) renderAIHeader() string {
+	// 接続状態
+	statusText := ""
+	if m.ollamaAvailable {
+		statusText = SuccessStyle.Render("● 接続中")
+	} else {
+		statusText = ErrorStyle.Render("● 未接続")
 	}
 
-	return `AI Assistant
+	// モデル情報
+	modelText := ""
+	if len(m.availableModels) > 0 {
+		modelText = fmt.Sprintf("Model: %s", m.aiService.GetModel())
+		if len(m.availableModels) > 1 {
+			modelText += CommentStyle.Render(fmt.Sprintf(" (Tab: %d個利用可能)", len(m.availableModels)))
+		}
+	} else {
+		modelText = fmt.Sprintf("Model: %s", m.aiService.GetModel())
+	}
 
-[!] 検知された問題 (2件):
-
-1. Docker メモリ使用率
-   512MB / 7.66GB (6.7%)
-   
-   原因: 長時間稼働による蓄積
-   
-   推奨対応:
-   - docker restart vit-viz-app
-   - メモリ制限の設定を確認
-
-2. Node.js 長時間稼働
-   稼働: 37日23時間
-   
-   推奨対応:
-   - 定期的な再起動
-   - pm2 restart all
-
-全体の健全性: 70%
-
-[a] 再分析`
+	return fmt.Sprintf("AI Assistant  %s\n%s", statusText, modelText)
 }
 
 // renderServiceDetail renders service detail
@@ -501,6 +568,12 @@ func (m Model) renderFooter() string {
 			return HelpStyle.Render("q: 終了 | h/←: 戻る")
 		}
 	}
+	// AI分析選択中の場合、追加のヘルプを表示
+	selectedItem := m.menuItems[m.selectedItem]
+	if selectedItem.Type == "ai" && len(m.availableModels) > 1 {
+		return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行 | Tab: モデル切替")
+	}
+	return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行")
 }
 
 
@@ -532,3 +605,5 @@ func (m Model) wrapWithHeaderFooter(content string) string {
 	// 全体を外枠で囲む
 	return OuterBorderStyle.Render(innerContent)
 }
+
+

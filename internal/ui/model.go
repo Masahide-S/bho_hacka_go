@@ -1,13 +1,17 @@
 package ui
 
 import (
-	"os/exec"
-	"time"
+	"context"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
+	"github.com/Masahide-S/bho_hacka_go/internal/ai"
+	"github.com/Masahide-S/bho_hacka_go/internal/llm"
 	"github.com/Masahide-S/bho_hacka_go/internal/logger"
+	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
 )
 
 
@@ -123,7 +127,71 @@ type Model struct {
 	logContent    string
 	logScroll     int
 	logTargetName string // ログ表示対象の名前
+
+
+	// AI関連フィールド
+	aiService    *ai.Service
+	aiState      int
+	aiResponse   string
+	aiPendingCmd string // 実行待ちのコマンド
+	aiCmdResult  string // コマンド実行結果
+
+	// ストリーミング用フィールド
+	currentStream <-chan llm.GenerateResponseStream
+
+	// Ollama接続状態
+	ollamaAvailable bool
+	availableModels []string
+	selectedModel   int // モデル選択インデックス
 }
+
+
+
+
+// AIの状態を表す定数
+const (
+	aiStateIdle = iota
+	aiStateLoading
+	aiStateSuccess
+	aiStateError
+)
+
+// aiAnalysisMsg はAI分析結果を運ぶメッセージ
+type aiAnalysisMsg struct {
+	Result string
+	Err    error
+}
+
+// cmdExecMsg はコマンド実行結果を運ぶメッセージ
+type cmdExecMsg struct {
+	Result string
+
+}
+
+// ストリーミング開始を通知するメッセージ
+type aiStreamStartMsg <-chan llm.GenerateResponseStream
+
+// ストリーミングの各パケットを運ぶメッセージ
+type aiStreamMsg struct {
+	Response string
+	Done     bool
+	Err      error
+}
+
+// Ollamaヘルスチェック結果を運ぶメッセージ
+type aiHealthMsg struct {
+	Err error
+}
+
+// モデル一覧取得結果を運ぶメッセージ
+type aiModelsMsg struct {
+	Models []string
+	Err    error
+}
+
+// コマンド抽出用の正規表現
+var cmdRegex = regexp.MustCompile(`<cmd>(.*?)</cmd>`)
+
 
 // InitialModel returns the initial model
 func InitialModel() Model {
@@ -169,6 +237,14 @@ func InitialModel() Model {
 		logContent:        "",
 		logScroll:         0,
 		logTargetName:     "",
+    aiService:       ai.NewService(),
+		aiState:         aiStateIdle,
+		aiPendingCmd:    "",
+		aiCmdResult:     "",
+		ollamaAvailable: false,
+		availableModels: []string{},
+		selectedModel:   0,
+
 	}
 }
 
@@ -182,7 +258,40 @@ func (m Model) Init() tea.Cmd {
 		tick(),
 		m.fetchAllServicesCmd(),
 		m.fetchContainerStatsCmd(),
+
 	)
+}
+
+// checkHealthCmd はOllamaサーバーの接続確認を行うコマンド
+func (m Model) checkHealthCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := m.aiService.CheckHealth(context.Background())
+		return aiHealthMsg{Err: err}
+	}
+}
+
+// fetchModelsCmd は利用可能なモデル一覧を取得するコマンド
+func (m Model) fetchModelsCmd() tea.Cmd {
+	return func() tea.Msg {
+		models, err := m.aiService.ListModels(context.Background())
+		return aiModelsMsg{Models: models, Err: err}
+	}
+}
+
+// waitForStreamResponse はストリーミングチャネルから次のデータを待つコマンド
+func waitForStreamResponse(sub <-chan llm.GenerateResponseStream) tea.Cmd {
+	return func() tea.Msg {
+		data, ok := <-sub
+		if !ok {
+			// チャネルが閉じられた場合は完了とみなす
+			return aiStreamMsg{Done: true}
+		}
+		return aiStreamMsg{
+			Response: data.Response,
+			Done:     data.Done,
+			Err:      data.Err,
+		}
+	}
 }
 
 
@@ -197,6 +306,30 @@ func tick() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// AIのコマンド実行待ち状態の時のキー操作
+		if m.aiPendingCmd != "" {
+			switch msg.String() {
+			case "enter":
+				// コマンド実行
+				cmdStr := m.aiPendingCmd
+				m.aiPendingCmd = ""
+				m.aiCmdResult = fmt.Sprintf("実行中: %s...", cmdStr)
+				return m, executePendingCmd(cmdStr)
+
+			case "esc", "n":
+				// キャンセル
+				m.aiPendingCmd = ""
+				m.aiCmdResult = "コマンド実行をキャンセルしました。"
+				return m, nil
+
+			case "q", "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			}
+			// コマンド待ちの時は他の操作をブロック
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
@@ -424,17 +557,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "a":
-			if m.showConfirmDialog {
-				return m, nil
-			}
-			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
-				selectedItem := m.menuItems[m.selectedItem]
-				if selectedItem.Name == "PostgreSQL" {
-					return m.handleDatabaseAnalyze()
-				}
-			}
-
 		// スクロール（右パネルで詳細表示時のみ）
 		case "ctrl+d":
 			if m.showLogView {
@@ -489,6 +611,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.lastCommandResult = fmt.Sprintf("ログ取得失敗: %v", msg.err)
 			return m, nil
+
+		// [a] キーでAI分析開始（AI分析メニュー選択時のみ）
+		case "a":
+			selectedItem := m.menuItems[m.selectedItem]
+			if selectedItem.Type == "ai" && m.aiState != aiStateLoading {
+				if !m.ollamaAvailable {
+					m.aiState = aiStateError
+					m.aiResponse = "Ollamaサーバーに接続できません。\nOllamaが起動しているか確認してください。"
+					return m, nil
+				}
+				m.aiState = aiStateLoading
+				m.aiResponse = ""
+				m.aiPendingCmd = "" // リセット
+				m.aiCmdResult = ""  // リセット
+				return m, m.runAIAnalysisCmd()
+			}
+
+		// [tab] キーでモデル切り替え（AI分析メニュー選択時のみ）
+		case "tab":
+			selectedItem := m.menuItems[m.selectedItem]
+			if selectedItem.Type == "ai" && len(m.availableModels) > 0 {
+				m.selectedModel = (m.selectedModel + 1) % len(m.availableModels)
+				m.aiService.SetModel(m.availableModels[m.selectedModel])
+			}
 		}
 
 		m.showLogView = true
@@ -655,10 +801,124 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.updateRightPanelItems()
 		}
 
+		// AI分析結果の受信
+	case aiAnalysisMsg:
+		if msg.Err != nil {
+			m.aiState = aiStateError
+			m.aiResponse = "エラーが発生しました:\n" + msg.Err.Error()
+		} else {
+			m.aiState = aiStateSuccess
+			m.aiResponse = msg.Result
+
+			// コマンドが含まれているかチェック
+			matches := cmdRegex.FindStringSubmatch(msg.Result)
+			if len(matches) > 1 {
+				m.aiPendingCmd = matches[1] // コマンド部分を抽出して保存
+			} else {
+				m.aiPendingCmd = ""
+			}
+		}
+		return m, nil
+
+	// コマンド実行結果の受信
+	case cmdExecMsg:
+		m.aiCmdResult = msg.Result
+		// 実行後に最新の状態を反映するため、全サービス再取得をトリガー
+		return m, m.fetchAllServicesCmd()
+
+	// ストリーミング開始の受信
+	case aiStreamStartMsg:
+		m.currentStream = msg
+		return m, waitForStreamResponse(m.currentStream)
+
+	// ストリーミングデータの受信
+	case aiStreamMsg:
+		if msg.Err != nil {
+			m.aiState = aiStateError
+			m.aiResponse += "\n\nエラーが発生しました:\n" + msg.Err.Error()
+			m.currentStream = nil
+			return m, nil
+		}
+
+		// 応答を追記
+		m.aiResponse += msg.Response
+
+		if msg.Done {
+			m.aiState = aiStateSuccess
+			// コマンド解析は完了後に実行
+			matches := cmdRegex.FindStringSubmatch(m.aiResponse)
+			if len(matches) > 1 {
+				m.aiPendingCmd = matches[1]
+			}
+			m.currentStream = nil
+			return m, nil
+		}
+
+		// まだ終わっていない場合、次のデータを待つ
+		return m, waitForStreamResponse(m.currentStream)
+
+	// Ollamaヘルスチェック結果の受信
+	case aiHealthMsg:
+		if msg.Err == nil {
+			m.ollamaAvailable = true
+		} else {
+			m.ollamaAvailable = false
+		}
+		return m, nil
+
+	// モデル一覧取得結果の受信
+	case aiModelsMsg:
+		if msg.Err == nil && len(msg.Models) > 0 {
+			m.availableModels = msg.Models
+			// デフォルトモデルがリストにあるか確認
+			currentModel := m.aiService.GetModel()
+			for i, model := range m.availableModels {
+				if model == currentModel {
+					m.selectedModel = i
+					break
+				}
+			}
+		}
+
 		return m, nil
 	}
 
 	return m, nil
+}
+
+// runAIAnalysisCmd は非同期でAI分析を実行（ストリーミングモード）
+func (m Model) runAIAnalysisCmd() tea.Cmd {
+	return func() tea.Msg {
+		// コンテキスト構築（RAG）
+		prompt := m.aiService.BuildSystemContext()
+
+		// ストリーミングモードで推論実行
+		stream, err := m.aiService.AnalyzeStream(context.Background(), prompt)
+		if err != nil {
+			return aiAnalysisMsg{Err: err}
+		}
+
+		// ストリームチャネルをメッセージとして返す
+		return aiStreamStartMsg(stream)
+	}
+}
+
+// executePendingCmd はシェル経由でコマンドを実行
+func executePendingCmd(command string) tea.Cmd {
+	return func() tea.Msg {
+		// sh -c を使うことでパイプやリダイレクトを含むコマンドも実行可能
+		cmd := exec.Command("sh", "-c", command)
+		output, err := cmd.CombinedOutput()
+
+		result := ""
+		if err != nil {
+			result = fmt.Sprintf("✗ 実行エラー: %v\n%s", err, string(output))
+		} else {
+			result = fmt.Sprintf("✓ 実行成功:\n%s", string(output))
+		}
+
+		return cmdExecMsg{Result: result}
+	}
 }
 
 // fetchSelectedServiceCmd fetches the currently selected service data
