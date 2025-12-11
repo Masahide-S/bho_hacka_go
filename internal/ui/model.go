@@ -171,6 +171,11 @@ type Model struct {
 	currentView viewMode
 	graphData   []float64
 	message     string
+
+	// --- Proactive Demo Features ---
+	hasProactiveAlertShown bool   // デモ中に一度だけ発動させるためのフラグ
+	proactiveMode          bool   // 自動分析モード中かどうか
+	confirmMessage         string // ダイアログに表示する動的なメッセージ
 }
 
 
@@ -286,6 +291,10 @@ func InitialModelWithStore(store *db.Store) Model {
 		dbStore:                store,
 		dbChan:                 make(chan monitor.FullSnapshot, 50), // バッファを持たせる
 		currentView:            viewMonitor,
+		// Proactive Demo Features
+		hasProactiveAlertShown: false,
+		proactiveMode:          false,
+		confirmMessage:         "",
 	}
 
 	// 裏方（DBワーカー）を始動
@@ -458,6 +467,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showConfirmDialog = false
 				m.confirmAction = ""
 				m.confirmTarget = ""
+				m.confirmMessage = "" // メッセージリセット
+				m.confirmType = ""
 				return m, nil
 			}
 			if m.showLogView {
@@ -742,6 +753,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 確認ダイアログの応答
 		case "y", "Y":
 			if m.showConfirmDialog {
+				// ▼▼▼ AIプロアクティブ修復の実行 ▼▼▼
+				if m.confirmType == "ai_proactive" {
+					cmdStr := m.aiPendingCmd
+
+					// ダイアログを閉じる
+					m.showConfirmDialog = false
+					m.confirmAction = ""
+					m.confirmTarget = ""
+					m.confirmMessage = "" // メッセージリセット
+					m.confirmType = ""
+
+					if cmdStr != "" {
+						// コマンド実行
+						m.aiCmdResult = fmt.Sprintf("🚀 AI自動修復を実行中: %s...", cmdStr)
+						m.aiPendingCmd = "" // リセット
+						return m, executePendingCmd(cmdStr)
+					}
+					return m, nil
+				}
+				// ▲▲▲ AIプロアクティブ修復ここまで ▲▲▲
+
 				return m.executeCommand()
 			}
 
@@ -750,6 +782,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showConfirmDialog = false
 				m.confirmAction = ""
 				m.confirmTarget = ""
+				m.confirmMessage = "" // メッセージリセット
+				m.confirmType = ""
 				return m, nil
 			}
 			if m.showLogView {
@@ -826,6 +860,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// 毎秒: サービス起動/停止チェック（非同期コマンドに変更）
 		cmds = append(cmds, updateServiceStatusCmd(m.menuItems)...)
+
+		// ▼▼▼ プロアクティブ監視ロジック ▼▼▼
+		// 3秒に1回チェック & まだアラートを出していない & AI分析中でない場合
+		if m.tickCount%3 == 0 && !m.hasProactiveAlertShown && m.aiState != aiStateLoading && m.ollamaAvailable {
+			// デモシナリオ: PostgreSQLが落ちていたら発動
+			if m.isServiceDown("PostgreSQL") {
+				m.hasProactiveAlertShown = true // フラグを立てて連打防止
+				m.proactiveMode = true
+				m.aiState = aiStateLoading
+				m.aiResponse = ""
+				m.message = "🚨 異常検知! AIによる自動解析を開始します..."
+
+				// 自動的にAI分析を開始するコマンドを返す
+				return m, tea.Batch(append(cmds, m.runProactiveAnalysisCmd("PostgreSQLデータベースのサービス停止を検知しました。"))...)
+			}
+		}
+		// ▲▲▲ プロアクティブ監視ロジック ▲▲▲
 
 		// 2秒ごと: システムリソース更新
 		if m.tickCount%2 == 0 {
@@ -1046,6 +1097,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.aiState = aiStateError
 			m.aiResponse += "\n\nエラーが発生しました:\n" + msg.Err.Error()
 			m.currentStream = nil
+			m.proactiveMode = false // エラー時もモード終了
 			return m, nil
 		}
 
@@ -1059,6 +1111,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(matches) > 1 {
 				m.aiPendingCmd = matches[1]
 			}
+
+			// ▼▼▼ プロアクティブモードなら完了後に自動でダイアログを出す ▼▼▼
+			if m.proactiveMode {
+				m.proactiveMode = false // モード終了
+				m.showConfirmDialog = true
+				m.confirmType = "ai_proactive" // 専用の確認タイプ
+				m.message = "" // メッセージをクリア
+
+				// ダイアログメッセージの構築
+				if m.aiPendingCmd != "" {
+					m.confirmMessage = fmt.Sprintf(
+						"⚠️ トラブルシューティング完了\n\nAIが障害を検知し、復旧策を提案しました。\n\n提案コマンド:\n%s\n\n実行して復旧しますか？",
+						m.aiPendingCmd,
+					)
+				} else {
+					m.confirmMessage = "⚠️ トラブルシューティング完了\n\nAIが分析を完了しましたが、\n実行可能なコマンドは提案されませんでした。"
+				}
+				m.currentStream = nil
+				return m, nil
+			}
+			// ▲▲▲ プロアクティブモードここまで ▲▲▲
+
 			m.currentStream = nil
 			return m, nil
 		}
@@ -1851,3 +1925,40 @@ func RunWithStore(store *db.Store) error {
 	_, err := p.Run()
 	return err
 }
+
+// ▼▼▼ プロアクティブ監視用ヘルパーメソッド ▼▼▼
+
+// isServiceDown は指定したサービスのステータスが異常かチェックします
+func (m Model) isServiceDown(serviceName string) bool {
+	for _, item := range m.menuItems {
+		if item.Name == serviceName && item.Status == "✗" {
+			return true
+		}
+	}
+	return false
+}
+
+// runProactiveAnalysisCmd はデモ用に特化したAI分析を実行します
+func (m Model) runProactiveAnalysisCmd(issue string) tea.Cmd {
+	return func() tea.Msg {
+		// デモ用の強力なシステムプロンプト
+		sysPrompt := `あなたは優秀なSRE(Site Reliability Engineer)です。
+システムに発生した障害を検知しました。
+即座に状況を分析し、復旧のためのDockerコマンドを提示してください。
+解説は短く、必ず実行コマンドを <cmd>...</cmd> タグで囲んで出力してください。
+例: <cmd>docker start postgres-db</cmd>`
+
+		// ユーザーコンテキスト（自動生成）
+		userContext := fmt.Sprintf("緊急アラート: %s\nコンテナの状態を確認し、再起動または修正を行うコマンドを提示してください。", issue)
+
+		// ストリーミング分析開始
+		stream, err := m.aiService.AnalyzeStream(context.Background(), sysPrompt, userContext)
+		if err != nil {
+			return aiAnalysisMsg{Err: err}
+		}
+
+		return aiStreamStartMsg(stream)
+	}
+}
+
+// ▲▲▲ プロアクティブ監視用ヘルパーメソッド ▲▲▲

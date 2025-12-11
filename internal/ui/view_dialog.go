@@ -11,7 +11,10 @@ import (
 func (m Model) renderWithConfirmDialog(mainView string) string {
 	var dialogContent string
 
-	if m.confirmType == "python_process" {
+	// ▼▼▼ カスタムメッセージがあればそれを使う（AIプロアクティブダイアログ用） ▼▼▼
+	if m.confirmMessage != "" {
+		dialogContent = m.confirmMessage + "\n\n[Y] はい\n[N] いいえ"
+	} else if m.confirmType == "python_process" {
 		// Pythonプロセスの操作
 		process := m.getSelectedPythonProcess()
 		if process == nil {
