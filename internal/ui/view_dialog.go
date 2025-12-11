@@ -11,7 +11,34 @@ import (
 func (m Model) renderWithConfirmDialog(mainView string) string {
 	var dialogContent string
 
-	if m.confirmType == "process" {
+	if m.confirmType == "python_process" {
+		// Pythonプロセスの操作
+		process := m.getSelectedPythonProcess()
+		if process == nil {
+			return mainView
+		}
+
+		actionJP := ""
+		actionDetail := ""
+		switch m.confirmAction {
+		case "kill":
+			actionJP = "停止"
+			actionDetail = "このプロセスを停止します"
+		case "force_kill":
+			actionJP = "強制停止"
+			actionDetail = "⚠ このプロセスを強制停止します（SIGKILL）"
+		}
+
+		dialogContent = fmt.Sprintf(`プロセスを %s しますか？
+
+%s
+
+プロジェクト: %s
+PID: %s
+
+[Y] はい
+[N] いいえ`, actionJP, actionDetail, process.ProcessType, process.PID)
+	} else if m.confirmType == "process" {
 		// Node.jsプロセスの操作
 		process := m.getSelectedNodeProcess()
 		if process == nil {
@@ -38,6 +65,78 @@ PID: %s
 
 [Y] はい
 [N] いいえ`, actionJP, actionDetail, process.ProjectName, process.PID)
+	} else if m.confirmType == "mysql_database" {
+		// MySQLデータベースの操作
+		actionJP := ""
+		actionDetail := ""
+		switch m.confirmAction {
+		case "drop":
+			actionJP = "削除"
+			actionDetail = "⚠ このデータベースを削除します（データは復元できません）"
+		case "optimize":
+			actionJP = "最適化"
+			actionDetail = "このデータベースを最適化します"
+		}
+
+		dialogContent = fmt.Sprintf(`データベースを %s しますか？
+
+%s
+
+データベース名: %s
+
+[Y] はい
+[N] いいえ`, actionJP, actionDetail, m.confirmTarget)
+	} else if m.confirmType == "redis_database" {
+		// Redisデータベースの操作
+		actionJP := ""
+		actionDetail := ""
+		switch m.confirmAction {
+		case "flushdb":
+			actionJP = "クリア"
+			actionDetail = "⚠ このデータベースの全キーを削除します（データは復元できません）"
+		}
+
+		dialogContent = fmt.Sprintf(`データベースを %s しますか？
+
+%s
+
+データベース: %s
+
+[Y] はい
+[N] いいえ`, actionJP, actionDetail, m.confirmTarget)
+	} else if m.confirmType == "port" {
+		// ポートの操作（プロセス停止）
+		port := m.getSelectedPort()
+		if port == nil {
+			return mainView
+		}
+
+		actionJP := ""
+		actionDetail := ""
+		switch m.confirmAction {
+		case "kill_port":
+			actionJP = "停止"
+			actionDetail = "このプロセスを停止します"
+		case "force_kill_port":
+			actionJP = "強制停止"
+			actionDetail = "⚠ このプロセスを強制停止します（SIGKILL）"
+		}
+
+		projectName := port.ProjectName
+		if projectName == "" {
+			projectName = port.Process
+		}
+
+		dialogContent = fmt.Sprintf(`プロセスを %s しますか？
+
+%s
+
+プロジェクト: %s
+PID: %s
+ポート: :%s
+
+[Y] はい
+[N] いいえ`, actionJP, actionDetail, projectName, port.PID, port.Port)
 	} else if m.confirmType == "database" {
 		// PostgreSQLデータベースの操作
 		actionJP := ""

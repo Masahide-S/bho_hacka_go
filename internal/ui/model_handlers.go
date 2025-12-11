@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os/exec"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -137,6 +139,56 @@ func (m Model) handleContainerRemove() (Model, tea.Cmd) {
 	m.confirmAction = "remove"
 	m.confirmTarget = container.ID
 	m.confirmType = "container"
+
+	return m, nil
+}
+
+// handleOpenInVSCode opens the project directory in VSCode
+func (m Model) handleOpenInVSCode() (Model, tea.Cmd) {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return m, nil
+	}
+
+	var directory string
+	selectedMenuItem := m.menuItems[m.selectedItem]
+
+	// 選択されているサービスに応じてディレクトリを取得
+	switch selectedMenuItem.Name {
+	case "Docker":
+		// Dockerコンテナの場合
+		container := m.getSelectedContainer()
+		if container != nil {
+			directory = container.ProjectDir
+		}
+
+	case "Node.js":
+		// Node.jsプロセスの場合
+		process := m.getSelectedNodeProcess()
+		if process != nil {
+			directory = process.ProjectDir
+		}
+
+	case "Python":
+		// Pythonプロセスの場合
+		process := m.getSelectedPythonProcess()
+		if process != nil {
+			directory = process.ProjectDir
+		}
+	}
+
+	// ディレクトリが取得できた場合、VSCodeで開く
+	if directory != "" {
+		cmd := exec.Command("code", directory)
+		err := cmd.Start()
+
+		if err != nil {
+			m.lastCommandResult = "VSCodeで開けませんでした: " + err.Error()
+		} else {
+			m.lastCommandResult = "VSCodeで開きました: " + directory
+		}
+	} else {
+		m.lastCommandResult = "ディレクトリ情報が見つかりません"
+	}
 
 	return m, nil
 }

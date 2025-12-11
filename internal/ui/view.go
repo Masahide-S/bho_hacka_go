@@ -156,9 +156,24 @@ func (m Model) renderRightDetail(width, height int) string {
 		} else if selectedItem.Name == "PostgreSQL" {
 			// PostgreSQLの場合は特別処理
 			content = m.renderPostgresContent()
+		} else if selectedItem.Name == "MySQL" {
+			// MySQLの場合は特別処理
+			content = m.renderMySQLContent()
+		} else if selectedItem.Name == "Redis" {
+			// Redisの場合は特別処理
+			content = m.renderRedisContent()
 		} else if selectedItem.Name == "Node.js" {
 			// Node.jsの場合は特別処理
 			content = m.renderNodejsContent()
+		} else if selectedItem.Name == "Python" {
+			// Pythonの場合は特別処理
+			content = m.renderPythonContent()
+		} else if selectedItem.Name == "ポート一覧" {
+			// ポート一覧の場合は特別処理
+			content = m.renderPortsContent()
+		} else if selectedItem.Name == "システムリソース" {
+			// システムリソースの場合は特別処理
+			content = m.renderSystemResourcesDetail()
 		} else {
 			// キャッシュから取得（即座に表示）
 			if cache, exists := m.serviceCache[selectedItem.Name]; exists {
@@ -411,16 +426,28 @@ func (m Model) renderFooter() string {
 
 				if isCompose {
 					// Composeコンテナ: すべてのコマンドが使える
-					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | s: 起動/停止 | r: 再起動 | b: リビルド | d: 削除")
+					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | s: 起動/停止 | r: 再起動 | b: リビルド | d: 削除 | o: VSCodeで開く")
 				} else {
 					// 単体コンテナ: リビルドは使えない
-					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | s: 起動/停止 | r: 再起動 | d: 削除")
+					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | s: 起動/停止 | r: 再起動 | d: 削除 | o: VSCodeで開く")
 				}
 			} else if selectedItem.Name == "PostgreSQL" {
 				// PostgreSQLの場合
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | v: VACUUM | a: ANALYZE")
 			} else if selectedItem.Name == "Node.js" {
 				// Node.jsの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | o: VSCodeで開く")
+			} else if selectedItem.Name == "MySQL" {
+				// MySQLの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | o: 最適化")
+			} else if selectedItem.Name == "Redis" {
+				// Redisの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | f: FLUSHDB")
+			} else if selectedItem.Name == "Python" {
+				// Pythonの場合
+				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | o: VSCodeで開く")
+			} else if selectedItem.Name == "ポート一覧" {
+				// ポート一覧の場合
 				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")
 			}
 			return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール")

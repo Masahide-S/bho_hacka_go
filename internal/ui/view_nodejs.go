@@ -76,6 +76,14 @@ func (m Model) renderNodeProcessDetails(process *monitor.NodeProcess) string {
 		portText,
 	)
 
+	// URLを追加（ポートがある場合）
+	if process.Port != "" {
+		details += fmt.Sprintf(`
+
+  アクセス情報:
+    URL: http://localhost:%s`, process.Port)
+	}
+
 	return details
 }
 

@@ -5,23 +5,74 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // SystemResources holds system resource information
 type SystemResources struct {
+	// CPU情報
 	CPUUsage    float64
-	MemoryUsed  int64 // MB
-	MemoryTotal int64 // MB
-	MemoryPerc  float64
+	CPUCores    int
+
+	// メモリ情報（Activity Monitor形式）
+	MemoryTotal      int64   // 総メモリ (MB)
+	MemoryUsed       int64   // 使用中 = App Memory + Wired + Compressed (MB)
+	MemoryAppMemory  int64   // App Memory (Active) (MB)
+	MemoryWired      int64   // Wired Memory (MB)
+	MemoryCompressed int64   // Compressed (MB)
+	MemoryCached     int64   // Cached Files (MB)
+	MemoryAvailable  int64   // 使用可能 (MB)
+	MemoryPerc       float64 // 使用率 (%)
+
+	// ストレージ情報
+	StorageTotal int64   // 総容量 (GB)
+	StorageUsed  int64   // 使用量 (GB)
+	StorageFree  int64   // 空き容量 (GB)
+	StoragePerc  float64 // 使用率 (%)
+
+	// ディスク情報（追加）
+	DiskUsage float64 // ディスク使用率 (%)
+	DiskFree  int64   // ディスク空き容量 (GB)
+
+	// その他の情報
+	ProcessCount int    // プロセス数
+	Uptime       string // システム稼働時間
 }
 
 // GetSystemResources returns current system resource usage
 func GetSystemResources() SystemResources {
+	memStats := getDetailedMemoryStats()
+	storageStats := getStorageStats()
+	diskUsage, diskFree := getDiskUsage()
+
 	return SystemResources{
-		CPUUsage:    getCPUUsage(),
-		MemoryUsed:  getMemoryUsed(),
-		MemoryTotal: getMemoryTotal(),
-		MemoryPerc:  getMemoryPercentage(),
+		// CPU
+		CPUUsage: getCPUUsage(),
+		CPUCores: getCPUCores(),
+
+		// メモリ（Activity Monitor形式）
+		MemoryTotal:      memStats.Total,
+		MemoryUsed:       memStats.Used,
+		MemoryAppMemory:  memStats.AppMemory,
+		MemoryWired:      memStats.Wired,
+		MemoryCompressed: memStats.Compressed,
+		MemoryCached:     memStats.Cached,
+		MemoryAvailable:  memStats.Available,
+		MemoryPerc:       memStats.UsedPerc,
+
+		// ストレージ
+		StorageTotal: storageStats.Total,
+		StorageUsed:  storageStats.Used,
+		StorageFree:  storageStats.Free,
+		StoragePerc:  storageStats.UsedPerc,
+
+		// ディスク
+		DiskUsage: diskUsage,
+		DiskFree:  diskFree,
+
+		// その他
+		ProcessCount: getProcessCount(),
+		Uptime:       getSystemUptime(),
 	}
 }
 
@@ -40,30 +91,44 @@ func getCPUUsage() float64 {
 	return usage
 }
 
-// getMemoryUsed returns used memory in MB (lightweight version)
+// getMemoryUsed returns used memory in MB using vm_stat parsing
 func getMemoryUsed() int64 {
-	// vm_stat の代わりに sysctl を使用（より軽量）
-	cmd := exec.Command("sh", "-c", "sysctl -n hw.memsize")
-	totalBytes, err := cmd.Output()
+	// vm_stat の出力を取得
+	cmd := exec.Command("vm_stat")
+	output, err := cmd.Output()
 	if err != nil {
 		return 0
 	}
 
-	total, _ := strconv.ParseInt(strings.TrimSpace(string(totalBytes)), 10, 64)
+	lines := strings.Split(string(output), "\n")
+	pageSize := int64(4096) // macOSのページサイズは通常4KB
 
-	// 空きメモリ取得
-	cmd = exec.Command("sh", "-c", "vm_stat | grep 'Pages free' | awk '{print $3}' | sed 's/\\.//'")
-	freePages, err := cmd.Output()
-	if err != nil {
-		return 0
+	var active, wired, compressed int64
+
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		// 数値部分を抽出（末尾のピリオドを削除）
+		valueStr := strings.TrimSuffix(fields[len(fields)-1], ".")
+		value, err := strconv.ParseInt(valueStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if strings.Contains(line, "Pages active") {
+			active = value
+		} else if strings.Contains(line, "Pages wired down") {
+			wired = value
+		} else if strings.Contains(line, "Pages occupied by compressor") {
+			compressed = value
+		}
 	}
 
-	free, _ := strconv.ParseInt(strings.TrimSpace(string(freePages)), 10, 64)
-
-	// 使用中 = 全体 - 空き
-	totalMB := total / (1024 * 1024)
-	freeMB := (free * 4096) / (1024 * 1024)
-	usedMB := totalMB - freeMB
+	// 計算式: (Pages active + Pages wired down + Pages occupied by compressor) * 4096 / (1024 * 1024)
+	usedMB := (active + wired + compressed) * pageSize / (1024 * 1024)
 
 	return usedMB
 }
@@ -104,10 +169,227 @@ func getMemoryPercentage() float64 {
 
 // FormatSystemResources formats system resources for display
 func FormatSystemResources(sr SystemResources) string {
-	return fmt.Sprintf("CPU: %.1f%% | メモリ: %.1fGB/%.1fGB (%.0f%%)",
+	return fmt.Sprintf("CPU: %.1f%% | メモリ: %.1fGB/%.1fGB (%.0f%%) | ディスク: %.0f%% (空き %dGB)",
 		sr.CPUUsage,
 		float64(sr.MemoryUsed)/1024.0,
 		float64(sr.MemoryTotal)/1024.0,
 		sr.MemoryPerc,
+		sr.DiskUsage,
+		sr.DiskFree,
 	)
+}
+
+// MemoryStats holds detailed memory statistics
+type MemoryStats struct {
+	Total      int64
+	Used       int64
+	AppMemory  int64
+	Wired      int64
+	Compressed int64
+	Cached     int64
+	Available  int64
+	UsedPerc   float64
+}
+
+// getDetailedMemoryStats returns detailed memory statistics (Activity Monitor style)
+func getDetailedMemoryStats() MemoryStats {
+	// vm_stat の出力を取得
+	cmd := exec.Command("vm_stat")
+	output, err := cmd.Output()
+	if err != nil {
+		return MemoryStats{}
+	}
+
+	lines := strings.Split(string(output), "\n")
+	pageSize := int64(4096) // macOSのページサイズは通常4KB
+
+	var active, wired, compressed, cached, free, inactive int64
+
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		// 数値部分を抽出（末尾のピリオドを削除）
+		valueStr := strings.TrimSuffix(fields[len(fields)-1], ".")
+		value, err := strconv.ParseInt(valueStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if strings.Contains(line, "Pages active") {
+			active = value
+		} else if strings.Contains(line, "Pages wired down") {
+			wired = value
+		} else if strings.Contains(line, "Pages occupied by compressor") {
+			compressed = value
+		} else if strings.Contains(line, "File-backed pages") {
+			cached = value
+		} else if strings.Contains(line, "Pages free") {
+			free = value
+		} else if strings.Contains(line, "Pages inactive") {
+			inactive = value
+		}
+	}
+
+	// MB単位に変換
+	totalMB := getMemoryTotal()
+	appMemoryMB := (active * pageSize) / (1024 * 1024)
+	wiredMB := (wired * pageSize) / (1024 * 1024)
+	compressedMB := (compressed * pageSize) / (1024 * 1024)
+	cachedMB := (cached * pageSize) / (1024 * 1024)
+	freeMB := (free * pageSize) / (1024 * 1024)
+	inactiveMB := (inactive * pageSize) / (1024 * 1024)
+
+	// 使用中 = App Memory + Wired + Compressed (Activity Monitor形式)
+	usedMB := appMemoryMB + wiredMB + compressedMB
+
+	// 使用可能 = Free + Inactive
+	availableMB := freeMB + inactiveMB
+
+	// 使用率
+	usedPerc := 0.0
+	if totalMB > 0 {
+		usedPerc = (float64(usedMB) / float64(totalMB)) * 100
+	}
+
+	return MemoryStats{
+		Total:      totalMB,
+		Used:       usedMB,
+		AppMemory:  appMemoryMB,
+		Wired:      wiredMB,
+		Compressed: compressedMB,
+		Cached:     cachedMB,
+		Available:  availableMB,
+		UsedPerc:   usedPerc,
+	}
+}
+
+// StorageStats holds storage statistics
+type StorageStats struct {
+	Total    int64
+	Used     int64
+	Free     int64
+	UsedPerc float64
+}
+
+// getStorageStats returns storage statistics
+func getStorageStats() StorageStats {
+	// df -h / でルートパーティションの情報を取得
+	cmd := exec.Command("df", "-g", "/")
+	output, err := cmd.Output()
+	if err != nil {
+		return StorageStats{}
+	}
+
+	lines := strings.Split(string(output), "\n")
+	if len(lines) < 2 {
+		return StorageStats{}
+	}
+
+	fields := strings.Fields(lines[1])
+	if len(fields) < 5 {
+		return StorageStats{}
+	}
+
+	// GB単位で取得
+	total, _ := strconv.ParseInt(fields[1], 10, 64)
+	used, _ := strconv.ParseInt(fields[2], 10, 64)
+	free, _ := strconv.ParseInt(fields[3], 10, 64)
+
+	usedPerc := 0.0
+	if total > 0 {
+		usedPerc = (float64(used) / float64(total)) * 100
+	}
+
+	return StorageStats{
+		Total:    total,
+		Used:     used,
+		Free:     free,
+		UsedPerc: usedPerc,
+	}
+}
+
+// getCPUCores returns the number of CPU cores
+func getCPUCores() int {
+	cmd := exec.Command("sysctl", "-n", "hw.ncpu")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	cores, _ := strconv.Atoi(strings.TrimSpace(string(output)))
+	return cores
+}
+
+// getProcessCount returns the number of running processes
+func getProcessCount() int {
+	cmd := exec.Command("sh", "-c", "ps -A | wc -l")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	count, _ := strconv.Atoi(strings.TrimSpace(string(output)))
+	// ヘッダー行を除く
+	return count - 1
+}
+
+// getSystemUptime returns system uptime
+func getSystemUptime() string {
+	cmd := exec.Command("uptime")
+	output, err := cmd.Output()
+	if err != nil {
+		return "不明"
+	}
+
+	// uptime の出力から稼働時間部分を抽出
+	uptimeStr := string(output)
+
+	// "up" から "user" までの部分を抽出
+	if strings.Contains(uptimeStr, "up") {
+		parts := strings.Split(uptimeStr, "up")
+		if len(parts) >= 2 {
+			remaining := parts[1]
+			if strings.Contains(remaining, "user") {
+				uptimePart := strings.Split(remaining, "user")[0]
+				return strings.TrimSpace(uptimePart)
+			} else if strings.Contains(remaining, ",") {
+				// "," の前までを取得
+				uptimePart := strings.Split(remaining, ",")[0]
+				return strings.TrimSpace(uptimePart)
+			}
+		}
+	}
+
+	return strings.TrimSpace(uptimeStr)
+}
+
+// getDiskUsage returns disk usage percentage and free space in GB using syscall.Statfs
+func getDiskUsage() (float64, int64) {
+	var stat syscall.Statfs_t
+	err := syscall.Statfs("/", &stat)
+	if err != nil {
+		return 0.0, 0
+	}
+
+	// Total blocks と Available blocks から計算
+	totalBlocks := stat.Blocks
+	availableBlocks := stat.Bavail
+	blockSize := uint64(stat.Bsize)
+
+	// 使用済みブロック数 = Total - Available
+	usedBlocks := totalBlocks - availableBlocks
+
+	// 使用率（%）
+	usagePerc := 0.0
+	if totalBlocks > 0 {
+		usagePerc = (float64(usedBlocks) / float64(totalBlocks)) * 100
+	}
+
+	// 空き容量（GB）
+	freeGB := int64(availableBlocks * blockSize / (1024 * 1024 * 1024))
+
+	return usagePerc, freeGB
 }

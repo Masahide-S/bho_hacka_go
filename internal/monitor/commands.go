@@ -309,3 +309,147 @@ func ExecuteNodeCommand(pid, action string) CommandResult {
 		Message: fmt.Sprintf("Node.jsプロセス (PID: %s) を%sしました", pid, actionJP),
 	}
 }
+
+// ExecuteMySQLCommand executes a MySQL command
+func ExecuteMySQLCommand(databaseName, action string) CommandResult {
+	var cmd *exec.Cmd
+
+	switch action {
+	case "drop":
+		// データベースを削除
+		cmd = exec.Command("mysql", "-e", fmt.Sprintf("DROP DATABASE IF EXISTS %s;", databaseName))
+	case "optimize":
+		// データベースを最適化
+		cmd = exec.Command("mysql", "-e", fmt.Sprintf("OPTIMIZE TABLE %s.*;", databaseName))
+	default:
+		return CommandResult{Success: false, Message: "不明なアクション"}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("データベース操作失敗: %s", string(output)),
+		}
+	}
+
+	actionJP := ""
+	switch action {
+	case "drop":
+		actionJP = "削除"
+	case "optimize":
+		actionJP = "最適化"
+	}
+
+	return CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("データベース %s を%sしました", databaseName, actionJP),
+	}
+}
+
+// ExecuteRedisCommand executes a Redis command
+func ExecuteRedisCommand(dbIndex, action string) CommandResult {
+	var cmd *exec.Cmd
+
+	switch action {
+	case "flushdb":
+		// データベースをクリア
+		dbNum := strings.TrimPrefix(dbIndex, "db")
+		cmd = exec.Command("redis-cli", "-n", dbNum, "FLUSHDB")
+	default:
+		return CommandResult{Success: false, Message: "不明なアクション"}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("Redis操作失敗: %s", string(output)),
+		}
+	}
+
+	actionJP := ""
+	switch action {
+	case "flushdb":
+		actionJP = "クリア"
+	}
+
+	return CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Redis %s を%sしました", dbIndex, actionJP),
+	}
+}
+
+// ExecutePythonCommand executes a Python process command
+func ExecutePythonCommand(pid, action string) CommandResult {
+	var cmd *exec.Cmd
+
+	switch action {
+	case "kill":
+		// プロセスを停止
+		cmd = exec.Command("kill", pid)
+	case "force_kill":
+		// プロセスを強制停止
+		cmd = exec.Command("kill", "-9", pid)
+	default:
+		return CommandResult{Success: false, Message: "不明なアクション"}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("プロセス操作失敗: %s", string(output)),
+		}
+	}
+
+	actionJP := ""
+	switch action {
+	case "kill":
+		actionJP = "停止"
+	case "force_kill":
+		actionJP = "強制停止"
+	}
+
+	return CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Pythonプロセス (PID: %s) を%sしました", pid, actionJP),
+	}
+}
+
+// ExecutePortCommand executes a command on a port (process)
+func ExecutePortCommand(pid, action string) CommandResult {
+	var cmd *exec.Cmd
+
+	switch action {
+	case "kill_port":
+		// プロセスを停止
+		cmd = exec.Command("kill", pid)
+	case "force_kill_port":
+		// プロセスを強制停止
+		cmd = exec.Command("kill", "-9", pid)
+	default:
+		return CommandResult{Success: false, Message: "不明なアクション"}
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("プロセス操作失敗: %s", string(output)),
+		}
+	}
+
+	actionJP := ""
+	switch action {
+	case "kill_port":
+		actionJP = "停止"
+	case "force_kill_port":
+		actionJP = "強制停止"
+	}
+
+	return CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("プロセス (PID: %s) を%sしました", pid, actionJP),
+	}
+}

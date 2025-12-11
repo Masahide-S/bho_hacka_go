@@ -168,6 +168,21 @@ func (m Model) renderContainerDetails(container *monitor.DockerContainer) string
   Compose情報:
     プロジェクト: %s
     サービス名: %s`, container.ComposeProject, container.ComposeService)
+
+		// プロジェクトディレクトリを追加
+		if container.ProjectDir != "" {
+			details += fmt.Sprintf(`
+    プロジェクトディレクトリ: %s`, container.ProjectDir)
+		}
+	}
+
+	// ポート情報とURLを追加
+	if container.Port != "" {
+		details += fmt.Sprintf(`
+
+  アクセス情報:
+    ポート: %s
+    URL: http://localhost:%s`, container.Port, container.Port)
 	}
 
 	return details

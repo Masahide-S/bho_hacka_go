@@ -14,6 +14,8 @@ type DockerContainer struct {
 	Image          string
 	ComposeProject string // Composeプロジェクト名（空の場合は単体）
 	ComposeService string // Composeサービス名
+	ProjectDir     string // プロジェクトディレクトリ（Composeの場合はdocker-compose.ymlのあるディレクトリ）
+	Port           string // 公開されているポート番号
 }
 
 // CheckDocker checks if Docker is running and counts containers
@@ -297,6 +299,15 @@ func GetDockerContainers() []DockerContainer {
 		// Compose情報を取得（軽量版）
 		composeProject, composeService := getComposeInfo(containerID)
 
+		// プロジェクトディレクトリを取得（Composeの場合）
+		projectDir := ""
+		if composeProject != "" {
+			projectDir = getContainerProjectDir(containerID)
+		}
+
+		// ポート情報を取得
+		port := getContainerPort(containerID)
+
 		containers = append(containers, DockerContainer{
 			ID:             containerID,
 			Name:           parts[1],
@@ -304,6 +315,8 @@ func GetDockerContainers() []DockerContainer {
 			Image:          parts[3],
 			ComposeProject: composeProject,
 			ComposeService: composeService,
+			ProjectDir:     projectDir,
+			Port:           port,
 		})
 	}
 
@@ -338,4 +351,50 @@ func getComposeInfo(containerID string) (project, service string) {
 // IsComposeContainer checks if a container is part of a compose project
 func IsComposeContainer(container DockerContainer) bool {
 	return container.ComposeProject != ""
+}
+
+// getContainerProjectDir returns the project directory for a compose container
+func getContainerProjectDir(containerID string) string {
+	cmd := exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	workDir := strings.TrimSpace(string(output))
+	if workDir == "" || workDir == "<no value>" {
+		return ""
+	}
+
+	return workDir
+}
+
+// getContainerPort returns the exposed port for a container
+func getContainerPort(containerID string) string {
+	cmd := exec.Command("docker", "port", containerID)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return ""
+	}
+
+	// 最初のポートマッピングを取得（例: "3000/tcp -> 0.0.0.0:3000"）
+	firstLine := lines[0]
+	if strings.Contains(firstLine, "->") {
+		parts := strings.Split(firstLine, "->")
+		if len(parts) >= 2 {
+			portPart := strings.TrimSpace(parts[1])
+			// "0.0.0.0:3000" から "3000" を抽出
+			if strings.Contains(portPart, ":") {
+				portNum := strings.Split(portPart, ":")[1]
+				return portNum
+			}
+		}
+	}
+
+	return ""
 }

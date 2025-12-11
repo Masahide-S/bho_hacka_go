@@ -30,6 +30,12 @@ type containerStatsMsg struct {
 	ContainersList []monitor.DockerContainer       // コンテナリスト
 }
 
+// portsDataMsg is sent when port data is fetched
+type portsDataMsg struct {
+	Ports     []monitor.PortInfo
+	UpdatedAt time.Time
+}
+
 // MenuItem represents an item in the left menu
 type MenuItem struct {
 	Name     string
@@ -83,7 +89,12 @@ type Model struct {
 	containerStatsCache     map[string]*ContainerStatsCache // コンテナID -> 統計キャッシュ
 	cachedContainers        []monitor.DockerContainer       // コンテナリストのキャッシュ
 	cachedPostgresDatabases []monitor.PostgresDatabase      // PostgreSQLデータベースのキャッシュ
+	cachedMySQLDatabases    []monitor.MySQLDatabase         // MySQLデータベースのキャッシュ
+	cachedRedisDatabases    []monitor.RedisDatabase         // Redisデータベースのキャッシュ
 	cachedNodeProcesses     []monitor.NodeProcess           // Node.jsプロセスのキャッシュ
+	cachedPythonProcesses   []monitor.PythonProcess         // Pythonプロセスのキャッシュ
+	cachedPorts             []monitor.PortInfo              // ポート一覧のキャッシュ
+	cachedPortsUpdatedAt    time.Time                       // ポート一覧の最終更新時刻
 	tickCount               int
 
 	// Right panel navigation
@@ -124,7 +135,10 @@ func InitialModel() Model {
 		containerStatsCache:     make(map[string]*ContainerStatsCache),
 		cachedContainers:        []monitor.DockerContainer{},
 		cachedPostgresDatabases: []monitor.PostgresDatabase{},
+		cachedMySQLDatabases:    []monitor.MySQLDatabase{},
+		cachedRedisDatabases:    []monitor.RedisDatabase{},
 		cachedNodeProcesses:     []monitor.NodeProcess{},
+		cachedPythonProcesses:   []monitor.PythonProcess{},
 		tickCount:               0,
 		focusedPanel:        "left",
 		rightPanelCursor:    0,
@@ -292,6 +306,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.handleContainerRemove()
 				} else if selectedItem.Name == "PostgreSQL" {
 					return m.handleDatabaseDrop()
+				} else if selectedItem.Name == "MySQL" {
+					return m.handleMySQLDatabaseDrop()
 				}
 			}
 
@@ -303,6 +319,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selectedItem := m.menuItems[m.selectedItem]
 				if selectedItem.Name == "Node.js" {
 					return m.handleProcessKill()
+				} else if selectedItem.Name == "Python" {
+					return m.handlePythonProcessKill()
+				} else if selectedItem.Name == "ポート一覧" {
+					return m.handlePortKill()
 				}
 			}
 
@@ -314,6 +334,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selectedItem := m.menuItems[m.selectedItem]
 				if selectedItem.Name == "Node.js" {
 					return m.handleProcessForceKill()
+				} else if selectedItem.Name == "Python" {
+					return m.handlePythonProcessForceKill()
+				} else if selectedItem.Name == "ポート一覧" {
+					return m.handlePortForceKill()
+				}
+			}
+
+		case "o":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "MySQL" {
+					return m.handleMySQLDatabaseOptimize()
+				} else if selectedItem.Name == "Docker" || selectedItem.Name == "Node.js" || selectedItem.Name == "Python" {
+					return m.handleOpenInVSCode()
+				}
+			}
+
+		case "f":
+			if m.showConfirmDialog {
+				return m, nil
+			}
+			if m.focusedPanel == "right" && len(m.rightPanelItems) > 0 {
+				selectedItem := m.menuItems[m.selectedItem]
+				if selectedItem.Name == "Redis" {
+					return m.handleRedisFlushDB()
 				}
 			}
 
@@ -391,15 +439,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// 選択中のサービスを優先更新
 		selectedItem := m.menuItems[m.selectedItem]
-		
+
 		if selectedItem.Type == "service" {
 			// サービス詳細: 3秒ごと（選択中）
 			if m.tickCount%3 == 0 {
 				cmds = append(cmds, m.fetchSelectedServiceCmd())
 			}
 		} else if selectedItem.Type == "info" {
-			// ポート一覧など: 5秒ごと（選択中）
-			if m.tickCount%5 == 0 {
+			// ポート一覧: 3秒ごと（選択中、高速更新）
+			if selectedItem.Name == "ポート一覧" && m.tickCount%3 == 0 {
+				cmds = append(cmds, m.fetchPortsDataCmd())
+			} else if m.tickCount%5 == 0 {
+				// その他のinfo: 5秒ごと
 				cmds = append(cmds, m.fetchSelectedServiceCmd())
 			}
 		}
@@ -447,11 +498,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if selectedItem.Name == "Docker" {
 			// Dockerの場合: コンテナ統計とリストを更新
 			updateCmds = append(updateCmds, m.fetchContainerStatsCmd())
-		} else if selectedItem.Name == "PostgreSQL" {
-			// PostgreSQLの場合: 右パネルを更新
+		} else if selectedItem.Name == "PostgreSQL" || selectedItem.Name == "MySQL" || selectedItem.Name == "Redis" {
+			// データベースの場合: 右パネルを更新
 			m = m.updateRightPanelItems()
-		} else if selectedItem.Name == "Node.js" {
-			// Node.jsの場合: 右パネルを更新
+		} else if selectedItem.Name == "Node.js" || selectedItem.Name == "Python" {
+			// プロセスの場合: 右パネルを更新
 			m = m.updateRightPanelItems()
 		}
 
@@ -479,6 +530,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Dockerパネルが選択されている場合のみ右パネルを更新
 		selectedItem := m.menuItems[m.selectedItem]
 		if selectedItem.Name == "Docker" {
+			m = m.updateRightPanelItems()
+		}
+
+		return m, nil
+
+	case portsDataMsg:
+		// ポート一覧のキャッシュを更新
+		m.cachedPorts = msg.Ports
+		m.cachedPortsUpdatedAt = msg.UpdatedAt
+
+		// ポート一覧パネルが選択されている場合のみ右パネルを更新
+		selectedItem := m.menuItems[m.selectedItem]
+		if selectedItem.Name == "ポート一覧" {
 			m = m.updateRightPanelItems()
 		}
 
@@ -790,6 +854,58 @@ func (m Model) updateRightPanelItems() Model {
 			})
 		}
 
+	case "MySQL":
+		// MySQLデータベース一覧を取得
+		databases := monitor.GetMySQLDatabases()
+		m.cachedMySQLDatabases = databases
+
+		// データベースを追加
+		for _, db := range databases {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type: "database",
+				Name: db.Name,
+			})
+		}
+
+	case "Redis":
+		// Redisデータベース一覧を取得
+		databases := monitor.GetRedisDatabases()
+		m.cachedRedisDatabases = databases
+
+		// データベースを追加
+		for _, db := range databases {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type: "database",
+				Name: db.Index,
+			})
+		}
+
+	case "Python":
+		// Pythonプロセス一覧を取得
+		processes := monitor.GetPythonProcesses()
+		m.cachedPythonProcesses = processes
+
+		// プロセスを追加
+		for _, proc := range processes {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type: "process",
+				Name: proc.PID,
+			})
+		}
+
+	case "ポート一覧":
+		// ポート一覧を取得
+		ports := monitor.GetListeningPorts()
+		m.cachedPorts = ports
+
+		// ポートを追加
+		for _, port := range ports {
+			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+				Type: "port",
+				Name: port.Port,
+			})
+		}
+
 	default:
 		// その他は選択不可
 		m.rightPanelItems = []RightPanelItem{}
@@ -936,6 +1052,96 @@ func (m Model) getSelectedNodeProcess() *monitor.NodeProcess {
 	return nil
 }
 
+// getSelectedMySQLDatabase returns the currently selected MySQL database
+func (m Model) getSelectedMySQLDatabase() *monitor.MySQLDatabase {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// データベース以外はnil
+	if selectedItem.Type != "database" {
+		return nil
+	}
+
+	// データベース名から検索
+	for i := range m.cachedMySQLDatabases {
+		if m.cachedMySQLDatabases[i].Name == selectedItem.Name {
+			return &m.cachedMySQLDatabases[i]
+		}
+	}
+
+	return nil
+}
+
+// getSelectedRedisDatabase returns the currently selected Redis database
+func (m Model) getSelectedRedisDatabase() *monitor.RedisDatabase {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// データベース以外はnil
+	if selectedItem.Type != "database" {
+		return nil
+	}
+
+	// データベースインデックスから検索
+	for i := range m.cachedRedisDatabases {
+		if m.cachedRedisDatabases[i].Index == selectedItem.Name {
+			return &m.cachedRedisDatabases[i]
+		}
+	}
+
+	return nil
+}
+
+// getSelectedPythonProcess returns the currently selected Python process
+func (m Model) getSelectedPythonProcess() *monitor.PythonProcess {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+
+	// プロセス以外はnil
+	if selectedItem.Type != "process" {
+		return nil
+	}
+
+	// PIDから検索
+	for i := range m.cachedPythonProcesses {
+		if m.cachedPythonProcesses[i].PID == selectedItem.Name {
+			return &m.cachedPythonProcesses[i]
+		}
+	}
+
+	return nil
+}
+
+// getSelectedPort returns the selected port
+func (m Model) getSelectedPort() *monitor.PortInfo {
+	if m.rightPanelCursor >= len(m.rightPanelItems) {
+		return nil
+	}
+
+	selectedItem := m.rightPanelItems[m.rightPanelCursor]
+	if selectedItem.Type != "port" {
+		return nil
+	}
+
+	// ポート番号で検索
+	for i := range m.cachedPorts {
+		if m.cachedPorts[i].Port == selectedItem.Name {
+			return &m.cachedPorts[i]
+		}
+	}
+
+	return nil
+}
+
 // executeCommand executes the confirmed command
 func (m Model) executeCommand() (Model, tea.Cmd) {
 	// アクションとターゲットを保存
@@ -966,8 +1172,16 @@ func executeCommandCmd(target, action, targetType string) tea.Cmd {
 
 		if targetType == "database" {
 			result = monitor.ExecutePostgresCommand(target, action)
+		} else if targetType == "mysql_database" {
+			result = monitor.ExecuteMySQLCommand(target, action)
+		} else if targetType == "redis_database" {
+			result = monitor.ExecuteRedisCommand(target, action)
 		} else if targetType == "process" {
 			result = monitor.ExecuteNodeCommand(target, action)
+		} else if targetType == "python_process" {
+			result = monitor.ExecutePythonCommand(target, action)
+		} else if targetType == "port" {
+			result = monitor.ExecutePortCommand(target, action)
 		} else {
 			result = monitor.ExecuteDockerCommand(target, action, targetType)
 		}
@@ -1022,6 +1236,18 @@ func (m Model) fetchContainerStatsCmd() tea.Cmd {
 		return containerStatsMsg{
 			Containers:     cacheMap,
 			ContainersList: containers,
+		}
+	}
+}
+
+// fetchPortsDataCmd fetches port data
+func (m Model) fetchPortsDataCmd() tea.Cmd {
+	return func() tea.Msg {
+		ports := monitor.GetListeningPorts()
+
+		return portsDataMsg{
+			Ports:     ports,
+			UpdatedAt: time.Now(),
 		}
 	}
 }
