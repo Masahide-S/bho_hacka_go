@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -29,8 +28,8 @@ type PostgresConnection struct {
 
 // CheckPostgres checks if PostgreSQL is running
 func CheckPostgres() string {
-	cmd := exec.Command("pgrep", "postgres")
-	err := cmd.Run()
+	// タイムアウト付きでpgrepを実行
+	_, err := RunCommandWithTimeout("pgrep", "postgres")
 
 	if err != nil {
 		return "✗ PostgreSQL: 停止中"
@@ -81,7 +80,7 @@ func CheckPostgres() string {
 func getPostgresDatabaseDetails() []string {
 	// データベース名、サイズ、作成日時を取得
 	sizeQuery := `
-		SELECT 
+		SELECT
 			d.datname,
 			pg_size_pretty(pg_database_size(d.datname)) as size,
 			(pg_stat_file('base/'||d.oid ||'/PG_VERSION')).modification as created
@@ -89,18 +88,17 @@ func getPostgresDatabaseDetails() []string {
 		WHERE d.datistemplate = false
 		ORDER BY d.datname;
 	`
-	
-	cmd := exec.Command("psql", "-d", "postgres", "-c", sizeQuery, "-t", "-A", "-F", "|")
-	output, err := cmd.Output()
-	
+
+	// タイムアウト付きでpsqlを実行
+	output, err := RunCommandWithTimeout("psql", "-d", "postgres", "-c", sizeQuery, "-t", "-A", "-F", "|")
+
 	if err != nil {
 		return getPostgresDatabasesBasic()
 	}
-	
+
 	// 最終接続時刻を別途取得
 	accessQuery := `SELECT datname, stats_reset FROM pg_stat_database WHERE datname NOT IN ('template0', 'template1');`
-	accessCmd := exec.Command("psql", "-d", "postgres", "-c", accessQuery, "-t", "-A", "-F", "|")
-	accessOutput, _ := accessCmd.Output()
+	accessOutput, _ := RunCommandWithTimeout("psql", "-d", "postgres", "-c", accessQuery, "-t", "-A", "-F", "|")
 	
 	// 最終接続時刻をマップに格納
 	accessMap := make(map[string]string)
@@ -197,9 +195,9 @@ func formatTimeAgo(timestamp string) string {
 
 // getPostgresDatabasesBasic returns basic database list (fallback)
 func getPostgresDatabasesBasic() []string {
-	cmd := exec.Command("psql", "-d", "postgres", "-l", "-t")
-	output, err := cmd.Output()
-	
+	// タイムアウト付きでpsqlを実行
+	output, err := RunCommandWithTimeout("psql", "-d", "postgres", "-l", "-t")
+
 	if err != nil {
 		return []string{}
 	}
@@ -227,8 +225,8 @@ func getPostgresDatabasesBasic() []string {
 
 // getPortByProcess finds the port for a given process name
 func getPortByProcess(processName string) string {
-	cmd := exec.Command("lsof", "-i", "-P", "-n")
-	output, err := cmd.Output()
+	// タイムアウト付きでlsofを実行
+	output, err := RunCommandWithTimeout("lsof", "-i", "-P", "-n")
 
 	if err != nil {
 		return ""
@@ -259,14 +257,31 @@ func getPortByProcess(processName string) string {
 }
 // getPostgresUptime returns how long PostgreSQL has been running
 func getPostgresUptime() string {
-	cmd := exec.Command("sh", "-c", "ps -o etime= -p $(pgrep postgres | head -1)")
-	output, err := cmd.Output()
+	// sh -c を排除し、Goで直接PIDを取得してからpsを実行
 
+	// 1. pgrepでPIDを取得
+	output, err := RunCommandWithTimeout("pgrep", "-n", "postgres") // -n: newest（最新のPID）
 	if err != nil {
 		return ""
 	}
 
-	uptime := strings.TrimSpace(string(output))
+	pid := strings.TrimSpace(string(output))
+	if pid == "" {
+		return ""
+	}
+
+	// PIDのバリデーション
+	if !IsValidPID(pid) {
+		return ""
+	}
+
+	// 2. そのPIDの稼働時間を取得
+	psOutput, err := RunCommandWithTimeout("ps", "-o", "etime=", "-p", pid)
+	if err != nil {
+		return ""
+	}
+
+	uptime := strings.TrimSpace(string(psOutput))
 	return uptime
 }
 
@@ -285,8 +300,8 @@ func GetPostgresDatabases() []PostgresDatabase {
 		ORDER BY d.datname;
 	`
 
-	cmd := exec.Command("psql", "-d", "postgres", "-c", query, "-t", "-A", "-F", "|")
-	output, err := cmd.Output()
+	// タイムアウト付きでpsqlを実行
+	output, err := RunCommandWithTimeout("psql", "-d", "postgres", "-c", query, "-t", "-A", "-F", "|")
 
 	if err != nil {
 		return []PostgresDatabase{}
@@ -294,8 +309,7 @@ func GetPostgresDatabases() []PostgresDatabase {
 
 	// 最終接続時刻を別途取得
 	accessQuery := `SELECT datname, stats_reset FROM pg_stat_database WHERE datname NOT IN ('template0', 'template1');`
-	accessCmd := exec.Command("psql", "-d", "postgres", "-c", accessQuery, "-t", "-A", "-F", "|")
-	accessOutput, _ := accessCmd.Output()
+	accessOutput, _ := RunCommandWithTimeout("psql", "-d", "postgres", "-c", accessQuery, "-t", "-A", "-F", "|")
 
 	// 最終接続時刻をマップに格納
 	accessMap := make(map[string]string)
@@ -343,8 +357,8 @@ func GetPostgresDatabases() []PostgresDatabase {
 
 // GetPostgresConnection returns PostgreSQL connection info
 func GetPostgresConnection() PostgresConnection {
-	cmd := exec.Command("pgrep", "postgres")
-	err := cmd.Run()
+	// タイムアウト付きでpgrepを実行
+	_, err := RunCommandWithTimeout("pgrep", "postgres")
 
 	conn := PostgresConnection{
 		IsRunning: err == nil,

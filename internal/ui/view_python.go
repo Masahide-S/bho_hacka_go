@@ -9,14 +9,12 @@ import (
 
 // renderPythonContent renders Python process information
 func (m Model) renderPythonContent() string {
-	// プロセス情報を取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	processes := m.cachedPythonProcesses
-	if len(processes) == 0 {
-		processes = monitor.GetPythonProcesses()
-	}
 
+	// キャッシュがない場合はローディング表示
 	if len(processes) == 0 {
-		return "Python: プロセスが実行されていません"
+		return "データ取得中... (Python)\n\nプロセスが実行されていない可能性があります"
 	}
 
 	// 統計情報を生成
@@ -91,10 +89,10 @@ func (m Model) renderPythonProcessDetails(process *monitor.PythonProcess) string
 func (m Model) renderSelectablePythonContent() string {
 	var newLines []string
 
-	// キャッシュから取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	processes := m.cachedPythonProcesses
 	if len(processes) == 0 {
-		processes = monitor.GetPythonProcesses()
+		return "  データ取得中..."
 	}
 
 	// 各プロセスを表示

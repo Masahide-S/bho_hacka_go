@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -20,9 +19,7 @@ type DockerContainer struct {
 
 // CheckDocker checks if Docker is running and counts containers
 func CheckDocker() string {
-	cmd := exec.Command("docker", "ps", "-q")
-	output, err := cmd.Output()
-
+	output, err := RunCommandWithTimeout("docker", "ps", "-q")
 	if err != nil {
 		return "✗ Docker: 停止中"
 	}
@@ -51,9 +48,7 @@ func CheckDocker() string {
 
 // getDockerContainerDetails returns detailed info for each container
 func getDockerContainerDetails() []string {
-	cmd := exec.Command("docker", "ps", "--format", "{{.Names}}|{{.Ports}}|{{.Status}}|{{.Image}}|{{.ID}}")
-	output, err := cmd.Output()
-
+	output, err := RunCommandWithTimeout("docker", "ps", "--format", "{{.Names}}|{{.Ports}}|{{.Status}}|{{.Image}}|{{.ID}}")
 	if err != nil {
 		return []string{}
 	}
@@ -122,9 +117,12 @@ func getDockerContainerDetails() []string {
 
 // GetDockerImageSize returns the size of a Docker image
 func GetDockerImageSize(imageName string) string {
-	cmd := exec.Command("docker", "images", imageName, "--format", "{{.Size}}")
-	output, err := cmd.Output()
+	// 入力検証（イメージ名は特殊文字を含む場合があるので簡易検証）
+	if imageName == "" || strings.ContainsAny(imageName, ";|&$`") {
+		return ""
+	}
 
+	output, err := RunCommandWithTimeout("docker", "images", imageName, "--format", "{{.Size}}")
 	if err != nil {
 		return ""
 	}
@@ -140,9 +138,12 @@ type DockerStats struct {
 
 // GetDockerContainerStats returns CPU and memory stats for a container
 func GetDockerContainerStats(containerID string) DockerStats {
-	cmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", containerID)
-	output, err := cmd.Output()
+	// 入力検証
+	if !IsValidContainerID(containerID) && !IsValidIdentifier(containerID) {
+		return DockerStats{}
+	}
 
+	output, err := RunCommandWithTimeout("docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", containerID)
 	if err != nil {
 		return DockerStats{}
 	}
@@ -182,9 +183,12 @@ func formatDockerStatsString(stats DockerStats) string {
 
 // getContainerWorkDir returns the working directory of a container
 func getContainerWorkDir(containerName string) string {
-	cmd := exec.Command("docker", "inspect", "--format", "{{.Config.WorkingDir}}", containerName)
-	output, err := cmd.Output()
+	// 入力検証
+	if !IsValidIdentifier(containerName) && !IsValidContainerID(containerName) {
+		return ""
+	}
 
+	output, err := RunCommandWithTimeout("docker", "inspect", "--format", "{{.Config.WorkingDir}}", containerName)
 	if err != nil {
 		return ""
 	}
@@ -194,9 +198,12 @@ func getContainerWorkDir(containerName string) string {
 
 // getContainerMounts returns mount information for a container
 func getContainerMounts(containerName string) []string {
-	cmd := exec.Command("docker", "inspect", "--format", "{{range .Mounts}}{{.Source}} -> {{.Destination}}{{\"\\n\"}}{{end}}", containerName)
-	output, err := cmd.Output()
+	// 入力検証
+	if !IsValidIdentifier(containerName) && !IsValidContainerID(containerName) {
+		return []string{}
+	}
 
+	output, err := RunCommandWithTimeout("docker", "inspect", "--format", "{{range .Mounts}}{{.Source}} -> {{.Destination}}{{\"\n\"}}{{end}}", containerName)
 	if err != nil {
 		return []string{}
 	}
@@ -269,9 +276,7 @@ func extractMainPort(ports string) string {
 
 // GetDockerContainers returns list of all Docker containers (simple version)
 func GetDockerContainers() []DockerContainer {
-	cmd := exec.Command("docker", "ps", "-a", "--format", "{{.ID}}|{{.Names}}|{{.Status}}|{{.Image}}")
-	output, err := cmd.Output()
-
+	output, err := RunCommandWithTimeout("docker", "ps", "-a", "--format", "{{.ID}}|{{.Names}}|{{.Status}}|{{.Image}}")
 	if err != nil {
 		return []DockerContainer{}
 	}
@@ -325,9 +330,13 @@ func GetDockerContainers() []DockerContainer {
 
 // getComposeInfo returns compose project and service for a container (lightweight)
 func getComposeInfo(containerID string) (project, service string) {
+	// 入力検証
+	if !IsValidContainerID(containerID) && !IsValidIdentifier(containerID) {
+		return "", ""
+	}
+
 	// Composeプロジェクト名を取得
-	cmd := exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project\"}}")
-	output, err := cmd.Output()
+	output, err := RunCommandWithTimeout("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project\"}}")
 	if err == nil {
 		project = strings.TrimSpace(string(output))
 		if project == "<no value>" {
@@ -336,8 +345,7 @@ func getComposeInfo(containerID string) (project, service string) {
 	}
 
 	// Composeサービス名を取得
-	cmd = exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.service\"}}")
-	output, err = cmd.Output()
+	output, err = RunCommandWithTimeout("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.service\"}}")
 	if err == nil {
 		service = strings.TrimSpace(string(output))
 		if service == "<no value>" {
@@ -355,8 +363,12 @@ func IsComposeContainer(container DockerContainer) bool {
 
 // getContainerProjectDir returns the project directory for a compose container
 func getContainerProjectDir(containerID string) string {
-	cmd := exec.Command("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}")
-	output, err := cmd.Output()
+	// 入力検証
+	if !IsValidContainerID(containerID) && !IsValidIdentifier(containerID) {
+		return ""
+	}
+
+	output, err := RunCommandWithTimeout("docker", "inspect", containerID, "--format", "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}")
 	if err != nil {
 		return ""
 	}
@@ -371,8 +383,12 @@ func getContainerProjectDir(containerID string) string {
 
 // getContainerPort returns the exposed port for a container
 func getContainerPort(containerID string) string {
-	cmd := exec.Command("docker", "port", containerID)
-	output, err := cmd.Output()
+	// 入力検証
+	if !IsValidContainerID(containerID) && !IsValidIdentifier(containerID) {
+		return ""
+	}
+
+	output, err := RunCommandWithTimeout("docker", "port", containerID)
 	if err != nil {
 		return ""
 	}
@@ -401,24 +417,21 @@ func getContainerPort(containerID string) string {
 
 // GetDanglingImagesCount returns the count of dangling images
 func GetDanglingImagesCount() int {
-	// docker images -f "dangling=true" -q | wc -l
-	cmd := exec.Command("sh", "-c", "docker images -f \"dangling=true\" -q | wc -l")
-	output, err := cmd.Output()
+	output, err := RunCommandWithTimeout("docker", "images", "-f", "dangling=true", "-q")
 	if err != nil {
 		return 0
 	}
 
-	countStr := strings.TrimSpace(string(output))
-	count := 0
-	fmt.Sscanf(countStr, "%d", &count)
-	return count
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return 0
+	}
+	return len(lines)
 }
 
 // GetDanglingImagesSize returns the total size of dangling images
 func GetDanglingImagesSize() string {
-	// docker images -f "dangling=true" --format "{{.Size}}"
-	cmd := exec.Command("docker", "images", "-f", "dangling=true", "--format", "{{.Size}}")
-	output, err := cmd.Output()
+	output, err := RunCommandWithTimeout("docker", "images", "-f", "dangling=true", "--format", "{{.Size}}")
 	if err != nil {
 		return "0B"
 	}

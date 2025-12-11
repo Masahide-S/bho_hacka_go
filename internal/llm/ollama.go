@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -18,26 +17,34 @@ type OllamaClient struct {
 	MaxRetries int
 }
 
-// APIリクエスト/レスポンス用の構造体定義
-type generateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
+// Message はチャットメッセージを表します
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
-type generateResponse struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
+// Options はモデルパラメータを表します
+type Options struct {
+	Temperature float32 `json:"temperature,omitempty"`
+	NumCtx      int     `json:"num_ctx,omitempty"`
 }
 
-type listModelsResponse struct {
-	Models []struct {
-		Name string `json:"name"`
-	} `json:"models"`
+// ChatRequest はChat APIへのリクエスト構造体です
+type ChatRequest struct {
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream"`
+	Options  *Options  `json:"options,omitempty"`
+}
+
+// chatResponse はChat APIからのレスポンス構造体です
+type chatResponse struct {
+	Message Message `json:"message"`
+	Done    bool    `json:"done"`
+	Error   string  `json:"error,omitempty"` // APIが返すエラーメッセージ
 }
 
 // GenerateResponseStream はストリーミングレスポンス用の構造体です
-// エラーが発生した場合、Errに値が入ります
 type GenerateResponseStream struct {
 	Response string
 	Done     bool
@@ -53,7 +60,9 @@ func NewOllamaClient(endpoint string) *OllamaClient {
 	return &OllamaClient{
 		Endpoint: endpoint,
 		HTTPClient: &http.Client{
-			Timeout: 60 * time.Second, // デフォルトタイムアウト
+			// 修正: タイムアウトを無効化（LLMの生成は長時間かかる場合があるためContextで制御推奨）
+			// 必要であれば呼び出し側でタイムアウト付きContextを渡す
+			Timeout: 0,
 		},
 		MaxRetries: 3,
 	}
@@ -92,6 +101,13 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	// レスポンス構造体定義（内部利用）
+	type listModelsResponse struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+
 	var result listModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
@@ -104,12 +120,15 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// Generate はテキスト生成を行います（非ストリーミング）
-func (c *OllamaClient) Generate(ctx context.Context, prompt string, model string) (string, error) {
-	reqBody := generateRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: false,
+// Generate はテキスト生成を行います（非ストリーミング・Chat API使用）
+func (c *OllamaClient) Generate(ctx context.Context, messages []Message, model string) (string, error) {
+	reqBody := ChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   false,
+		Options: &Options{
+			NumCtx: 4096, // デフォルトより少し大きめに確保
+		},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -117,7 +136,7 @@ func (c *OllamaClient) Generate(ctx context.Context, prompt string, model string
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/api/generate", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/api/chat", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", err
 	}
@@ -134,22 +153,27 @@ func (c *OllamaClient) Generate(ctx context.Context, prompt string, model string
 		return "", fmt.Errorf("APIエラー (%s): %s", resp.Status, string(body))
 	}
 
-	var result generateResponse
+	var result chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", err
 	}
 
-	return result.Response, nil
+	if result.Error != "" {
+		return "", fmt.Errorf("Ollama API error: %s", result.Error)
+	}
+
+	return result.Message.Content, nil
 }
 
-// GenerateStream はテキスト生成をストリーミングで行います
-// 改善点: 戻り値を文字列チャネルから構造体チャネルに変更し、エラー伝播可能に
-// 改善点: 初期接続時にリトライロジックを適用
-func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, model string) (<-chan GenerateResponseStream, error) {
-	reqBody := generateRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: true,
+// GenerateStream はテキスト生成をストリーミングで行います（Chat API使用）
+func (c *OllamaClient) GenerateStream(ctx context.Context, messages []Message, model string) (<-chan GenerateResponseStream, error) {
+	reqBody := ChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   true,
+		Options: &Options{
+			NumCtx: 8192, // ログ分析用に大きめのコンテキストを確保
+		},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -157,53 +181,66 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, model 
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/api/generate", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/api/chat", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// 改善: ストリーミングでも初期接続にはリトライを使用する
 	resp, err := c.doRequestWithRetry(req)
 	if err != nil {
 		return nil, err
 	}
 
-	// レスポンス処理用のチャネル（構造体に変更）
+	// 修正: ステータスコードチェックを追加
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("APIエラー (%s): %s", resp.Status, string(body))
+	}
+
 	stream := make(chan GenerateResponseStream)
 
 	go func() {
 		defer close(stream)
 		defer resp.Body.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
+		// 修正: bufio.Scanner ではなく json.Decoder を使用して安全にパース
+		decoder := json.NewDecoder(resp.Body)
+
+		for {
+			// コンテキストのキャンセルチェック
 			select {
 			case <-ctx.Done():
 				stream <- GenerateResponseStream{Err: ctx.Err()}
 				return
 			default:
-				var result generateResponse
-				if err := json.Unmarshal(scanner.Bytes(), &result); err != nil {
-					// JSONパースエラーはスキップせず続行
-					continue
-				}
-
-				// 正常なデータを送信
-				stream <- GenerateResponseStream{
-					Response: result.Response,
-					Done:     result.Done,
-				}
-
-				if result.Done {
-					return
-				}
+				// 続行
 			}
-		}
 
-		// 改善: スキャンエラー（途中切断など）のチェック
-		if err := scanner.Err(); err != nil {
-			stream <- GenerateResponseStream{Err: fmt.Errorf("stream interrupted: %w", err)}
+			var result chatResponse
+			if err := decoder.Decode(&result); err != nil {
+				if err == io.EOF {
+					break
+				}
+				stream <- GenerateResponseStream{Err: fmt.Errorf("stream decode error: %w", err)}
+				return
+			}
+
+			// APIエラーチェック
+			if result.Error != "" {
+				stream <- GenerateResponseStream{Err: fmt.Errorf("Ollama API error: %s", result.Error)}
+				return
+			}
+
+			stream <- GenerateResponseStream{
+				Response: result.Message.Content,
+				Done:     result.Done,
+			}
+
+			if result.Done {
+				return
+			}
 		}
 	}()
 
@@ -215,36 +252,35 @@ func (c *OllamaClient) doRequestWithRetry(req *http.Request) (*http.Response, er
 	var lastErr error
 
 	for i := 0; i <= c.MaxRetries; i++ {
-		// コンテキストのキャンセルチェック
 		if req.Context().Err() != nil {
 			return nil, req.Context().Err()
 		}
 
+		// リトライ時にBodyを巻き戻す必要がある
+		if i > 0 && req.GetBody != nil {
+			if body, err := req.GetBody(); err == nil {
+				req.Body = body
+			}
+		}
+
 		resp, err := c.HTTPClient.Do(req)
 		if err == nil {
-			// 成功または500系以外のエラーならそのまま返す
+			// 500系エラーのみリトライ対象とする
 			if resp.StatusCode < 500 {
 				return resp, nil
 			}
-			resp.Body.Close() // サーバーエラーの場合は閉じてリトライ
+			resp.Body.Close()
 			lastErr = fmt.Errorf("server error: %s", resp.Status)
 		} else {
 			lastErr = err
 		}
 
-		// 最後の試行でなければ待機
 		if i < c.MaxRetries {
 			select {
 			case <-req.Context().Done():
 				return nil, req.Context().Err()
-			case <-time.After(time.Duration(i*500+500) * time.Millisecond): // エクスポネンシャルバックオフ気味に待機
-				// リクエストボディを巻き戻す必要がある場合はここで対応が必要だが、
-				// 今回はbytes.Bufferを使っているのでGetBodyがあれば自動で処理される
-				if req.GetBody != nil {
-					if body, err := req.GetBody(); err == nil {
-						req.Body = body
-					}
-				}
+			case <-time.After(time.Duration(i*500+500) * time.Millisecond):
+				continue
 			}
 		}
 	}

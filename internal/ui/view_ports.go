@@ -9,11 +9,12 @@ import (
 
 // renderPortsContent renders port list information
 func (m Model) renderPortsContent() string {
-	// キャッシュから取得（高速化）
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	ports := m.cachedPorts
+
+	// キャッシュがない場合はローディング表示
 	if len(ports) == 0 {
-		// キャッシュがない場合は取得
-		ports = monitor.GetListeningPorts()
+		return "データ取得中... (ポート一覧)"
 	}
 
 	// 統計情報を生成
@@ -87,10 +88,10 @@ func (m Model) renderPortDetails(port *monitor.PortInfo) string {
 func (m Model) renderSelectablePortsContent() string {
 	var newLines []string
 
-	// キャッシュから取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	ports := m.cachedPorts
 	if len(ports) == 0 {
-		ports = monitor.GetListeningPorts()
+		return "  データ取得中..."
 	}
 
 	// 各ポートを表示

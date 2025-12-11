@@ -9,14 +9,12 @@ import (
 
 // renderNodejsContent renders Node.js process information
 func (m Model) renderNodejsContent() string {
-	// プロセス情報を取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	processes := m.cachedNodeProcesses
-	if len(processes) == 0 {
-		processes = monitor.GetNodeProcesses()
-	}
 
+	// キャッシュがない場合はローディング表示
 	if len(processes) == 0 {
-		return "Node.js: プロセスが実行されていません"
+		return "データ取得中... (Node.js)\n\nプロセスが実行されていない可能性があります"
 	}
 
 	// 統計情報を生成
@@ -91,10 +89,10 @@ func (m Model) renderNodeProcessDetails(process *monitor.NodeProcess) string {
 func (m Model) renderSelectableNodejsContent() string {
 	var newLines []string
 
-	// キャッシュから取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	processes := m.cachedNodeProcesses
 	if len(processes) == 0 {
-		processes = monitor.GetNodeProcesses()
+		return "  データ取得中..."
 	}
 
 	// 各プロセスを表示

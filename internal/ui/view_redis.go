@@ -9,16 +9,12 @@ import (
 
 // renderRedisContent renders Redis database information
 func (m Model) renderRedisContent() string {
-	// データベース情報を取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	databases := m.cachedRedisDatabases
-	if len(databases) == 0 {
-		databases = monitor.GetRedisDatabases()
-	}
 
-	// Redis自体が動いているか確認
-	cmd := monitor.CheckRedis()
-	if strings.Contains(cmd, "停止中") {
-		return "Redis: 停止中"
+	// キャッシュがない場合はローディング表示
+	if len(databases) == 0 {
+		return "データ取得中... (Redis)\n\nRedisが停止中の可能性があります"
 	}
 
 	// 統計情報を生成
@@ -66,10 +62,10 @@ func (m Model) renderRedisDatabaseDetails(database *monitor.RedisDatabase) strin
 func (m Model) renderSelectableRedisContent() string {
 	var newLines []string
 
-	// キャッシュから取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	databases := m.cachedRedisDatabases
 	if len(databases) == 0 {
-		databases = monitor.GetRedisDatabases()
+		return "  データ取得中..."
 	}
 
 	// 各データベースを表示

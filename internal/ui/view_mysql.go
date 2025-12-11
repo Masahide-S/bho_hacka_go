@@ -9,13 +9,12 @@ import (
 
 // renderMySQLContent renders MySQL database information
 func (m Model) renderMySQLContent() string {
-	// プロセス情報を取得
-	processes := monitor.GetMySQLDatabases()
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
+	databases := m.cachedMySQLDatabases
 
-	// MySQL自体が動いているか確認
-	cmd := monitor.CheckMySQL()
-	if strings.Contains(cmd, "停止中") {
-		return "MySQL: 停止中"
+	// キャッシュがない場合はローディング表示
+	if len(databases) == 0 {
+		return "データ取得中... (MySQL)\n\nMySQLが停止中の可能性があります"
 	}
 
 	// 統計情報を生成
@@ -23,7 +22,7 @@ func (m Model) renderMySQLContent() string {
   データベース数: %d個
 
 データベース一覧:
-`, len(processes))
+`, len(databases))
 
 	// データベースリストを生成
 	databaseList := m.renderSelectableMySQLContent()
@@ -63,10 +62,10 @@ func (m Model) renderMySQLDatabaseDetails(database *monitor.MySQLDatabase) strin
 func (m Model) renderSelectableMySQLContent() string {
 	var newLines []string
 
-	// キャッシュから取得
+	// キャッシュから取得（Viewではブロッキング処理を行わない）
 	databases := m.cachedMySQLDatabases
 	if len(databases) == 0 {
-		databases = monitor.GetMySQLDatabases()
+		return "  データ取得中..."
 	}
 
 	// 各データベースを表示
