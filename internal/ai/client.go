@@ -39,25 +39,29 @@ func (s *Service) GetModel() string {
 	return s.Model
 }
 
-// BuildSystemContext は現在のシステム状態を収集してプロンプト用テキストを作成します
-func (s *Service) BuildSystemContext() string {
+// BuildSystemContext は現在のシステム状態を収集し、システムプロンプトとユーザーコンテキストを返します
+// 戻り値: (systemPrompt, userContext)
+func (s *Service) BuildSystemContext() (string, string) {
+	// AIへの役割指示（System Prompt）
+	systemPrompt := `あなたは開発環境のトラブルシューティングを行う優秀なAIアシスタントです。
+提供されるシステム状況を分析し、開発者が気づくべき問題点や改善案を簡潔に指摘してください。
+深刻なエラーがある場合は、具体的な解決コマンドを <cmd>コマンド</cmd> の形式で提案してください。
+回答形式:
+- 短い要約
+- 発見された問題点（あれば）
+- 推奨されるアクション`
+
 	// 各モニターから情報を収集（RAG: Retrieval）
 	sysRes := monitor.GetSystemResources()
-	
-	// 各チェック関数の結果を取得
-	// 注意: 実際の実装ではログ取得などをここに追加するとさらに精度が上がります
+
 	dockerStatus := monitor.CheckDocker()
 	nodeStatus := monitor.CheckNodejs()
 	pythonStatus := monitor.CheckPython()
 	postgresStatus := monitor.CheckPostgres()
 	ports := monitor.ListAllPorts()
 
-	// プロンプトの構築
-	prompt := fmt.Sprintf(`
-あなたは開発環境のトラブルシューティングを行う優秀なAIアシスタントです。
-以下のシステム状況を分析し、開発者が気づくべき問題点や改善案を簡潔に指摘してください。
-深刻なエラーがある場合は、具体的な解決コマンドを <cmd>コマンド</cmd> の形式で提案してください。
-
+	// 分析対象のデータ（User Context）
+	userContext := fmt.Sprintf(`
 [システムリソース]
 CPU: %.1f%%
 Memory: %.1fGB / %.1fGB (%.0f%%)
@@ -76,34 +80,43 @@ Memory: %.1fGB / %.1fGB (%.0f%%)
 
 [ポート使用状況]
 %s
-
-回答形式:
-- 短い要約
-- 発見された問題点（あれば）
-- 推奨されるアクション
-`, 
+`,
 		sysRes.CPUUsage, float64(sysRes.MemoryUsed)/1024, float64(sysRes.MemoryTotal)/1024, sysRes.MemoryPerc,
 		dockerStatus, nodeStatus, pythonStatus, postgresStatus, ports,
 	)
 
-	return prompt
+	return systemPrompt, userContext
+}
+
+// buildMessages はシステムプロンプトとユーザー入力をチャットメッセージ形式に変換します
+func (s *Service) buildMessages(systemPrompt, userPrompt string) []llm.Message {
+	return []llm.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
 }
 
 // Analyze はOllamaに問い合わせを行います（非ストリーミング）
 func (s *Service) Analyze(prompt string) (string, error) {
 	ctx := context.Background()
-	return s.client.Generate(ctx, prompt, s.Model)
+	msgs := []llm.Message{
+		{Role: "user", Content: prompt},
+	}
+	return s.client.Generate(ctx, msgs, s.Model)
 }
 
 // AnalyzeWithContext はコンテキスト付きでOllamaに問い合わせを行います
 func (s *Service) AnalyzeWithContext(ctx context.Context, prompt string) (string, error) {
-	return s.client.Generate(ctx, prompt, s.Model)
+	msgs := []llm.Message{
+		{Role: "user", Content: prompt},
+	}
+	return s.client.Generate(ctx, msgs, s.Model)
 }
 
-// AnalyzeStream はストリーミングでOllamaに問い合わせを行います
-// 戻り値の型はllm.GenerateResponseStreamで、エラー情報も含まれます
-func (s *Service) AnalyzeStream(ctx context.Context, prompt string) (<-chan llm.GenerateResponseStream, error) {
-	return s.client.GenerateStream(ctx, prompt, s.Model)
+// AnalyzeStream はストリーミングでOllamaに問い合わせを行います（システムプロンプトとユーザープロンプトを分離）
+func (s *Service) AnalyzeStream(ctx context.Context, systemPrompt, userPrompt string) (<-chan llm.GenerateResponseStream, error) {
+	msgs := s.buildMessages(systemPrompt, userPrompt)
+	return s.client.GenerateStream(ctx, msgs, s.Model)
 }
 
 // CheckHealth はOllamaサーバーへの接続を確認します

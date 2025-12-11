@@ -258,7 +258,8 @@ func (m Model) Init() tea.Cmd {
 		tick(),
 		m.fetchAllServicesCmd(),
 		m.fetchContainerStatsCmd(),
-
+		m.checkHealthCmd(),
+		m.fetchModelsCmd(),
 	)
 }
 
@@ -890,10 +891,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) runAIAnalysisCmd() tea.Cmd {
 	return func() tea.Msg {
 		// コンテキスト構築（RAG）
-		prompt := m.aiService.BuildSystemContext()
+		// BuildSystemContext が system と user の2つを返すようになったため対応
+		sysPrompt, userContext := m.aiService.BuildSystemContext()
 
 		// ストリーミングモードで推論実行
-		stream, err := m.aiService.AnalyzeStream(context.Background(), prompt)
+		stream, err := m.aiService.AnalyzeStream(context.Background(), sysPrompt, userContext)
 		if err != nil {
 			return aiAnalysisMsg{Err: err}
 		}
