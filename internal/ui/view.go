@@ -19,6 +19,11 @@ func (m Model) View() string {
 		return "初期化中..."
 	}
 
+	// グラフモードの場合はグラフビューを表示
+	if m.currentView != viewMonitor {
+		return m.renderGraphView()
+	}
+
 	mainView := m.render2ColumnLayout()
 
 	// 確認ダイアログを重ねて表示
@@ -486,94 +491,98 @@ func (m Model) renderHeader() string {
 
 // renderFooter renders the footer
 func (m Model) renderFooter() string {
+	// 確認ダイアログ表示中
 	if m.showConfirmDialog {
 		return HelpStyle.Render("Y: はい | N: いいえ")
 	}
 
+	// === 左パネル（メニュー）操作中 ===
+	// ここでは「グラフ表示」が可能です
 	if m.focusedPanel == "left" {
-		return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | l/→: 詳細へ")
-	} else {
-		if len(m.rightPanelItems) > 0 {
-			// 選択されたサービスに応じてヘルプメッセージを変更
-			selectedItem := m.menuItems[m.selectedItem]
-			if selectedItem.Name == "Docker" {
-				isCompose := m.isSelectedContainerCompose()
+		return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | l/→: 詳細へ | g: リアルタイムグラフ | h: 3日履歴")
+	}
 
-				// 起動/停止のラベルを動的に決定
-				startStopText := "s: 起動/停止"
-				if m.rightPanelCursor < len(m.rightPanelItems) {
-					item := m.rightPanelItems[m.rightPanelCursor]
-					if item.Type == "project" {
-						// プロジェクト全体の場合、コンテナの状態を確認
-						containers := m.cachedContainers
-						runningCount := 0
-						totalCount := 0
-						for _, c := range containers {
-							if c.ComposeProject == item.Name {
-								totalCount++
-								if c.Status == "running" {
-									runningCount++
-								}
-							}
-						}
-						if runningCount > 0 && runningCount == totalCount {
-							startStopText = "s: 停止"
-						} else {
-							startStopText = "s: 起動"
-						}
-					} else if item.Type == "container" {
-						// 個別コンテナの場合
-						container := m.getSelectedContainer()
-						if container != nil {
-							if container.Status == "running" {
-								startStopText = "s: 停止"
-							} else {
-								startStopText = "s: 起動"
+	// === 右パネル（詳細）操作中 ===
+	// ここでは「戻る」操作が優先されます
+	// 共通のプレフィックス（戻る操作など）
+	const navHelp = "q: 終了 | h/←: 戻る | "
+
+	if len(m.rightPanelItems) > 0 {
+		// 選択されたサービスに応じてヘルプメッセージを変更
+		selectedItem := m.menuItems[m.selectedItem]
+
+		if selectedItem.Name == "Docker" {
+			isCompose := m.isSelectedContainerCompose()
+			startStopText := "s: 起動/停止"
+
+			// 起動/停止のラベルを動的に決定
+			if m.rightPanelCursor < len(m.rightPanelItems) {
+				item := m.rightPanelItems[m.rightPanelCursor]
+				isRunning := false
+
+				if item.Type == "project" {
+					// プロジェクト全体の場合
+					containers := m.cachedContainers
+					runningCount := 0
+					totalCount := 0
+					for _, c := range containers {
+						if c.ComposeProject == item.Name {
+							totalCount++
+							if c.Status == "running" {
+								runningCount++
 							}
 						}
 					}
+					isRunning = (runningCount > 0 && runningCount == totalCount)
+				} else if item.Type == "container" {
+					// 個別コンテナの場合
+					container := m.getSelectedContainer()
+					if container != nil {
+						isRunning = (container.Status == "running")
+					}
 				}
 
-				if isCompose {
-					// Composeコンテナ: すべてのコマンドが使える
-					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | " + startStopText + " | r: 再起動 | b: リビルド | d: 削除 | c: クリーン | L: ログ | o: VSCodeで開く")
+				if isRunning {
+					startStopText = "s: 停止"
 				} else {
-					// 単体コンテナ: リビルドは使えない
-					return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Space: トグル | Ctrl+D/U: スクロール | " + startStopText + " | r: 再起動 | d: 削除 | c: クリーン | L: ログ | o: VSCodeで開く")
+					startStopText = "s: 起動"
 				}
-			} else if selectedItem.Name == "PostgreSQL" {
-				// PostgreSQLの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | v: VACUUM | a: ANALYZE")
-			} else if selectedItem.Name == "Node.js" {
-				// Node.jsの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | L: ログ | o: VSCodeで開く")
-			} else if selectedItem.Name == "MySQL" {
-				// MySQLの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | d: 削除 | o: 最適化")
-			} else if selectedItem.Name == "Redis" {
-				// Redisの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | f: FLUSHDB")
-			} else if selectedItem.Name == "Python" {
-				// Pythonの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止 | L: ログ | o: VSCodeで開く")
-			} else if selectedItem.Name == "ポート一覧" {
-				// ポート一覧の場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")
-			} else if selectedItem.Name == "Top 10 プロセス" {
-				// Top 10 プロセスの場合
-				return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール | x: 停止 | X: 強制停止")
 			}
-			return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | h/←: 戻る | Ctrl+D/U: スクロール")
-		} else {
-			return HelpStyle.Render("q: 終了 | h/←: 戻る")
+
+			dockerCommon := "Space: トグル | " + startStopText + " | r: 再起動 | d: 削除"
+			if isCompose {
+				// Composeコンテナ
+				return HelpStyle.Render(navHelp + dockerCommon + " | b: リビルド | c: クリーン | L: ログ | o: VSCode")
+			} else {
+				// 単体コンテナ
+				return HelpStyle.Render(navHelp + dockerCommon + " | c: クリーン | L: ログ | o: VSCode")
+			}
+
+		} else if selectedItem.Name == "PostgreSQL" {
+			return HelpStyle.Render(navHelp + "d: 削除 | v: VACUUM | a: ANALYZE")
+
+		} else if selectedItem.Name == "Node.js" {
+			return HelpStyle.Render(navHelp + "x: 停止 | X: 強制停止 | L: ログ | o: VSCode")
+
+		} else if selectedItem.Name == "MySQL" {
+			return HelpStyle.Render(navHelp + "d: 削除 | o: 最適化")
+
+		} else if selectedItem.Name == "Redis" {
+			return HelpStyle.Render(navHelp + "f: FLUSHDB")
+
+		} else if selectedItem.Name == "Python" {
+			return HelpStyle.Render(navHelp + "x: 停止 | X: 強制停止 | L: ログ | o: VSCode")
+
+		} else if selectedItem.Name == "ポート一覧" || selectedItem.Name == "Top 10 プロセス" {
+			return HelpStyle.Render(navHelp + "x: 停止 | X: 強制停止")
 		}
+
+		// その他の右パネル項目
+		return HelpStyle.Render(navHelp + "Ctrl+D/U: スクロール")
 	}
-	// AI分析選択中の場合、追加のヘルプを表示
-	selectedItem := m.menuItems[m.selectedItem]
-	if selectedItem.Type == "ai" && len(m.availableModels) > 1 {
-		return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行 | Tab: モデル切替")
-	}
-	return HelpStyle.Render("q: 終了 | ↑↓/j/k: 選択 | a: AI分析実行")
+
+	// 右パネルだが項目がない場合
+	return HelpStyle.Render(navHelp[:len(navHelp)-3]) // 末尾の " | " を削除
 }
 
 
