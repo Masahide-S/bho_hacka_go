@@ -24,7 +24,7 @@ const (
 	viewGraphHistory            // 3日間トレンド (hキー)
 )
 
-// ▼▼▼ デモ用の定義を追加 ▼▼▼
+// ▼▼▼ 完全デモモード用の定義 ▼▼▼
 // デモの進行フェーズ定義
 const (
 	DemoPhaseNormal = 0 // 正常（初期状態）
@@ -32,13 +32,111 @@ const (
 	DemoPhaseFixed  = 2 // 復旧完了
 )
 
-// デモ用の偽データ（異常時）
+// デモ用テキストデータ（詳細ビュー用）
 const (
-	DemoDataPostgresBroken = "✗ PostgreSQL: 停止中\n  ⚠ 接続エラー: Connection refused on port 5432"
-	DemoDataDockerBroken   = "✓ Docker: 実行中\n  - web-frontend [:3000] | Running\n    └─ Error: DB Connection Timeout\n  - postgres-db [] | Exited (1) 5 seconds ago\n    └─ Mount: /var/lib/postgresql/data"
+	// PostgreSQL - 正常時
+	DemoTextPostgresNormal = `✓ PostgreSQL: 実行中 [:5432]
+  稼働時間: 3d 12h 45m
+
+  データベース一覧:
+  - app_main_db (125MB) | Connections: 4
+  - app_test_db (45MB) | Connections: 1
+  - metabase (89MB) | Connections: 2`
+
+	// PostgreSQL - 異常時
+	DemoTextPostgresBroken = `✗ PostgreSQL: 停止中
+  ⚠ Connection refused on port 5432
+  ⚠ Last Error: Fatal: the database system is starting up
+
+  最終正常稼働: 5秒前`
+
+	// Docker - 正常時
+	DemoTextDockerNormal = `✓ Docker: 実行中
+  コンテナ: 3個 (3 Running)
+
+  プロジェクト: my-awesome-app
+  - web-frontend [:3000] | Running | CPU: 2.1% | MEM: 128MB
+  - api-server [:8080] | Running | CPU: 5.3% | MEM: 256MB
+  - postgres-db [:5432] | Running | CPU: 1.2% | MEM: 512MB`
+
+	// Docker - 異常時
+	DemoTextDockerBroken = `✓ Docker: 実行中
+  コンテナ: 3個 (2 Running, 1 Error)
+
+  プロジェクト: my-awesome-app
+  - web-frontend [:3000] | Running
+    └─ ⚠ Error: DB Connection Timeout
+  - api-server [:8080] | Running
+    └─ ⚠ Warning: Retrying DB connection...
+  - postgres-db [:5432] | Exited (1) 5 seconds ago
+    └─ ✗ Container stopped unexpectedly`
+
+	// Node.js - 正常時
+	DemoTextNodeNormal = `✓ Node.js: 実行中
+
+  プロセス一覧:
+  - PID 12345 | [:3000] | /app/frontend
+    └─ CPU: 2.1% | MEM: 150MB | Uptime: 2h 15m
+  - PID 12346 | [:8080] | /app/api
+    └─ CPU: 5.3% | MEM: 256MB | Uptime: 2h 15m`
+
+	// Node.js - 異常時
+	DemoTextNodeBroken = `✓ Node.js: 実行中
+
+  プロセス一覧:
+  - PID 12345 | [:3000] | /app/frontend
+    └─ CPU: 2.1% | MEM: 150MB | Uptime: 2h 15m
+    └─ ⚠ UnhandledPromiseRejection: DB_CONN_ERR
+  - PID 12346 | [:8080] | /app/api
+    └─ CPU: 45.2% | MEM: 512MB | Uptime: 2h 15m
+    └─ ⚠ Error: ECONNREFUSED 127.0.0.1:5432`
+
+	// Python - 共通
+	DemoTextPython = `✓ Python: 実行中
+
+  プロセス一覧:
+  - PID 23456 | [:8000] | /app/backend (FastAPI)
+    └─ CPU: 3.2% | MEM: 180MB | Uptime: 1h 30m`
+
+	// MySQL - 共通（未稼働）
+	DemoTextMySQL = `✗ MySQL: 停止中
+  サービスが検出されませんでした`
+
+	// Redis - 共通（未稼働）
+	DemoTextRedis = `✗ Redis: 停止中
+  サービスが検出されませんでした`
+
+	// ポート一覧 - 正常時
+	DemoTextPortsNormal = `LISTEN Ports:
+  :3000  | node     | PID 12345 | /app/frontend
+  :5432  | postgres | PID 34567 | PostgreSQL
+  :8000  | python   | PID 23456 | FastAPI
+  :8080  | node     | PID 12346 | /app/api`
+
+	// ポート一覧 - 異常時
+	DemoTextPortsBroken = `LISTEN Ports:
+  :3000  | node     | PID 12345 | /app/frontend
+  :8000  | python   | PID 23456 | FastAPI
+  :8080  | node     | PID 12346 | /app/api
+
+  ⚠ Port 5432 (postgres) is not responding`
+
+	// システムリソース
+	DemoTextSystemResources = `システムリソース
+
+全体:
+  CPU: 12.5%%
+  メモリ: 4.2GB / 16.0GB (26%%)
+
+TOP5 リソース使用:
+  1. node (PID 12346) - CPU: 5.3%% MEM: 256MB
+  2. python (PID 23456) - CPU: 3.2%% MEM: 180MB
+  3. node (PID 12345) - CPU: 2.1%% MEM: 150MB
+  4. docker (PID 1234) - CPU: 1.5%% MEM: 512MB
+  5. postgres (PID 34567) - CPU: 1.2%% MEM: 256MB`
 )
 
-// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+// ▲▲▲ 完全デモモード用の定義 ▲▲▲
 
 // graphDataMsg はグラフデータ取得完了時のメッセージ
 type graphDataMsg struct {
@@ -251,6 +349,7 @@ func InitialModel() Model {
 }
 
 // InitialModelWithStore returns the initial model with database store
+// 完全デモモード: 外部データ取得を行わず、デモ用初期値を使用
 func InitialModelWithStore(store *db.Store) Model {
 	m := Model{
 		lastUpdate:   time.Now(),
@@ -258,19 +357,20 @@ func InitialModelWithStore(store *db.Store) Model {
 		menuItems: []MenuItem{
 			{Name: "AI分析", Type: "ai", Status: ""},
 			{Name: "────────────", Type: "separator", Status: ""},
-			{Name: "PostgreSQL", Type: "service", Status: "✗"},
-			{Name: "MySQL", Type: "service", Status: "✗"},
-			{Name: "Redis", Type: "service", Status: "✗"},
-			{Name: "Docker", Type: "service", Status: "✗"},
-			{Name: "Node.js", Type: "service", Status: "✗"},
-			{Name: "Python", Type: "service", Status: "✗"},
+			{Name: "PostgreSQL", Type: "service", Status: "✓"}, // デモ: 初期は正常
+			{Name: "MySQL", Type: "service", Status: "✗"},      // デモ: 未稼働
+			{Name: "Redis", Type: "service", Status: "✗"},      // デモ: 未稼働
+			{Name: "Docker", Type: "service", Status: "✓"},     // デモ: 稼働中
+			{Name: "Node.js", Type: "service", Status: "✓"},    // デモ: 稼働中
+			{Name: "Python", Type: "service", Status: "✓"},     // デモ: 稼働中
 			{Name: "────────────", Type: "separator", Status: ""},
 			{Name: "ポート一覧", Type: "info", Status: ""},
 			{Name: "Top 10 プロセス", Type: "info", Status: ""},
 			{Name: "システムリソース", Type: "info", Status: ""},
 		},
-		aiIssueCount:            0,
-		systemResources:         monitor.GetSystemResources(),
+		aiIssueCount: 0,
+		// 完全デモモード: systemResourcesは空のまま（使用しない）
+		systemResources:         monitor.SystemResources{},
 		serviceCache:            make(map[string]*ServiceCache),
 		containerStatsCache:     make(map[string]*ContainerStatsCache),
 		cachedContainers:        []monitor.DockerContainer{},
@@ -298,11 +398,11 @@ func InitialModelWithStore(store *db.Store) Model {
 		aiState:                 aiStateIdle,
 		aiPendingCmd:            "",
 		aiCmdResult:             "",
-		ollamaAvailable:         false,
+		ollamaAvailable:         false, // Ollamaチェックは残す（AI機能のため）
 		availableModels:         []string{},
 		selectedModel:           0,
 		dbStore:                 store,
-		dbChan:                  make(chan monitor.FullSnapshot, 50), // バッファを持たせる
+		dbChan:                  make(chan monitor.FullSnapshot, 50),
 		currentView:             viewMonitor,
 		// Proactive Demo Features
 		hasProactiveAlertShown: false,
@@ -312,7 +412,7 @@ func InitialModelWithStore(store *db.Store) Model {
 		demoPhase: DemoPhaseNormal,
 	}
 
-	// 裏方（DBワーカー）を始動
+	// 裏方（DBワーカー）を始動（完全デモモードでも残す - 使われないが害はない）
 	go m.startDBWorker()
 
 	return m
@@ -379,7 +479,7 @@ func waitForStreamResponse(sub <-chan llm.GenerateResponseStream) tea.Cmd {
 }
 
 // updateServiceStatusCmd はサービス状態を非同期でチェックするコマンドを生成します
-// 変更: メソッドレシーバ (m Model) を追加し、デモフェーズを参照できるように変更
+// 完全デモモード: 外部呼び出しを一切行わず、デモフェーズに応じた固定値を返す
 func (m Model) updateServiceStatusCmd() []tea.Cmd {
 	var cmds []tea.Cmd
 
@@ -391,55 +491,38 @@ func (m Model) updateServiceStatusCmd() []tea.Cmd {
 			continue
 		}
 
-		// 各サービスごとにgoroutineでチェックを実行するコマンドを作成
 		index := i
 		serviceName := item.Name
 
 		cmds = append(cmds, func() tea.Msg {
-			// ▼▼▼ デモ用ハイジャックロジック ▼▼▼
-			// フェーズが「異常(1)」で、対象がPostgreSQLなら強制的に「✗」を返す
-			if currentPhase == DemoPhaseBroken && serviceName == "PostgreSQL" {
-				return serviceStatusResultMsg{
-					Index:  index,
-					Status: "✗", // 強制エラー
-				}
-			}
-			// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+			var status string
 
-			var processName string
 			switch serviceName {
 			case "PostgreSQL":
-				processName = "postgres"
-			case "MySQL":
-				processName = "mysqld"
-			case "Redis":
-				processName = "redis-server"
+				// PostgreSQLはデモフェーズに応じて状態が変化
+				if currentPhase == DemoPhaseBroken {
+					status = "✗" // 異常フェーズでは停止
+				} else {
+					status = "✓" // 正常/復旧フェーズでは稼働
+				}
+
 			case "Docker":
-				processName = "docker"
+				status = "✓" // 常に稼働
+
 			case "Node.js":
-				processName = "node"
+				status = "✓" // 常に稼働
+
 			case "Python":
-				processName = "python"
+				status = "✓" // 常に稼働
+
+			case "MySQL":
+				status = "✗" // デモでは未稼働
+
+			case "Redis":
+				status = "✗" // デモでは未稼働
+
 			default:
-				return nil // チェック対象外
-			}
-
-			// タイムアウト付きでpgrepを実行（monitorパッケージを利用）
-			isRunning := monitor.IsServiceRunning(processName)
-
-			status := "✗"
-			if isRunning {
-				status = "✓"
-			}
-
-			// デモの安定性のため、フェーズ0, 2の場合は（実際の状態に関わらず）✓を返して安定させることも可能だが
-			// ここでは実際のステータスを優先しつつ、デモシナリオが壊れないようにする
-			// フェーズ0(Normal)または2(Fixed)のときは、基本的には動いている前提のシナリオだが、
-			// 実際の環境で動いていないと困るので、ここではモックはBroken時のみにする。
-			// もし環境依存を完全になくすなら、ここも "✓" 固定にする。
-			// 念のため、Postgresだけはフェーズ0,2なら強制✓にする
-			if serviceName == "PostgreSQL" && (currentPhase == DemoPhaseNormal || currentPhase == DemoPhaseFixed) {
-				status = "✓"
+				status = "✗"
 			}
 
 			return serviceStatusResultMsg{
@@ -930,41 +1013,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// ▲▲▲ プロアクティブ監視ロジック ▲▲▲
 
-		// 2秒ごと: システムリソース更新
-		if m.tickCount%2 == 0 {
-			m.systemResources = monitor.GetSystemResources()
-
-			// 【賢い保存ロジック】
-			// 毎回全プロセスを保存すると重いので、以下の条件でのみ詳細(Top 5)を取得して保存
-			// 条件: CPU負荷が高い(>50%) または 30秒に1回の定期保存
-			shouldSaveDetails := m.systemResources.CPUUsage > 50.0 || time.Since(m.lastDBSave) > 30*time.Second
-
-			var processesToSave []monitor.ProcessInfo
-			if shouldSaveDetails {
-				// 詳細分析用にTop 5プロセスを取得
-				processesToSave = monitor.GetTopProcesses(5)
-				m.lastDBSave = time.Now()
-			} else {
-				// 通常時は空リスト（親テーブルのメトリクスのみ保存される）
-				processesToSave = []monitor.ProcessInfo{}
-			}
-
-			// 非同期チャネルへ送信（selectでブロック回避）
-			if m.dbStore != nil {
-				snapshot := monitor.FullSnapshot{
-					System:    m.systemResources,
-					Processes: processesToSave,
-				}
-
-				select {
-				case m.dbChan <- snapshot:
-					// 送信成功
-				default:
-					// バッファがいっぱいなら今回は諦める（UI操作を優先）
-					logger.LogIssue("DB_SKIP", "Metrics channel full")
-				}
-			}
-		}
+		// 完全デモモード: システムリソース更新とDB保存は行わない
 
 		// 選択中のサービスを優先更新
 		selectedItem := m.menuItems[m.selectedItem]
@@ -1004,13 +1053,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.fetchNonSelectedServicesCmd())
 		}
 
-		if m.tickCount%10 == 0 {
-			logger.LogSystemResources(
-				m.systemResources.CPUUsage,
-				m.systemResources.MemoryUsed,
-				m.systemResources.MemoryTotal,
-			)
-		}
+		// 完全デモモード: ログ出力は行わない
 
 		return m, tea.Batch(cmds...)
 
@@ -1327,64 +1370,66 @@ func (m Model) fetchAllServicesCmd() tea.Cmd {
 }
 
 // fetchServiceDataCmd fetches service data asynchronously
-// 変更: メソッドレシーバ (m Model) を追加し、デモフェーズを参照できるように変更
+// 完全デモモード: 外部データ取得を一切行わず、モックデータを返す
 func (m Model) fetchServiceDataCmd(serviceName string) tea.Cmd {
+	// デモフェーズをキャプチャ
+	phase := m.demoPhase
+
 	return func() tea.Msg {
 		var data string
 
-		// ▼▼▼ デモ用ハイジャックロジック ▼▼▼
-		if m.demoPhase == DemoPhaseBroken {
-			if serviceName == "PostgreSQL" {
-				data = DemoDataPostgresBroken
-				return serviceDataMsg{ServiceName: serviceName, Data: data, UpdatedAt: time.Now()}
-			}
-			if serviceName == "Docker" {
-				data = DemoDataDockerBroken
-				return serviceDataMsg{ServiceName: serviceName, Data: data, UpdatedAt: time.Now()}
-			}
-		}
-		// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-
 		switch serviceName {
 		case "PostgreSQL":
-			data = monitor.CheckPostgres()
-		case "MySQL":
-			data = monitor.CheckMySQL()
-		case "Redis":
-			data = monitor.CheckRedis()
+			if phase == DemoPhaseBroken {
+				data = DemoTextPostgresBroken
+			} else {
+				data = DemoTextPostgresNormal
+			}
+
 		case "Docker":
-			data = monitor.CheckDocker()
+			if phase == DemoPhaseBroken {
+				data = DemoTextDockerBroken
+			} else {
+				data = DemoTextDockerNormal
+			}
+
 		case "Node.js":
-			data = monitor.CheckNodejs()
+			if phase == DemoPhaseBroken {
+				data = DemoTextNodeBroken
+			} else {
+				data = DemoTextNodeNormal
+			}
+
 		case "Python":
-			data = monitor.CheckPython()
+			data = DemoTextPython
+
+		case "MySQL":
+			data = DemoTextMySQL
+
+		case "Redis":
+			data = DemoTextRedis
+
 		case "ポート一覧":
-			data = monitor.ListAllPorts()
+			if phase == DemoPhaseBroken {
+				data = DemoTextPortsBroken
+			} else {
+				data = DemoTextPortsNormal
+			}
+
 		case "システムリソース":
-			// 詳細なシステムリソース情報
-			sr := monitor.GetSystemResources()
-			topProcs := monitor.GetTopProcesses(5) // TOP5
-			devProcs := monitor.GetDevProcesses()
+			data = DemoTextSystemResources
 
-			data = fmt.Sprintf(`システムリソース
+		case "Top 10 プロセス":
+			data = `Top 10 プロセス (CPU使用率順)
 
-全体:
-  CPU: %.1f%%
-  メモリ: %.1fGB / %.1fGB (%.0f%%)
+  1. node (PID 12346) - CPU: 5.3% MEM: 256MB - /app/api
+  2. python (PID 23456) - CPU: 3.2% MEM: 180MB - FastAPI
+  3. node (PID 12345) - CPU: 2.1% MEM: 150MB - /app/frontend
+  4. docker (PID 1234) - CPU: 1.5% MEM: 512MB - daemon
+  5. postgres (PID 34567) - CPU: 1.2% MEM: 256MB - PostgreSQL`
 
-TOP5 リソース使用:
-%s
-開発プロセス:
-%s`,
-				sr.CPUUsage,
-				float64(sr.MemoryUsed)/1024.0,
-				float64(sr.MemoryTotal)/1024.0,
-				sr.MemoryPerc,
-				monitor.FormatTopProcesses(topProcs),
-				monitor.FormatDevProcesses(devProcs),
-			)
 		default:
-			data = serviceName + " のデータ"
+			data = serviceName + " (Demo Mode)"
 		}
 
 		return serviceDataMsg{
@@ -1416,20 +1461,9 @@ func (m Model) fetchNonSelectedServicesCmd() tea.Cmd {
 }
 
 // updateRightPanelItems updates the right panel items based on selected service
+// 完全デモモード: 外部データ取得を一切行わず、ハードコードされたモックデータを使用
 func (m Model) updateRightPanelItems() Model {
 	selectedItem := m.menuItems[m.selectedItem]
-
-	// 現在選択中のコンテナIDを保存
-	var currentSelectedContainerID string
-	var currentSelectedProjectName string
-	if m.rightPanelCursor < len(m.rightPanelItems) {
-		currentItem := m.rightPanelItems[m.rightPanelCursor]
-		if currentItem.Type == "container" {
-			currentSelectedContainerID = currentItem.ContainerID
-		} else if currentItem.Type == "project" {
-			currentSelectedProjectName = currentItem.Name
-		}
-	}
 
 	// 既存のトグル状態を保存
 	expandedState := make(map[string]bool)
@@ -1443,165 +1477,90 @@ func (m Model) updateRightPanelItems() Model {
 
 	switch selectedItem.Name {
 	case "Docker":
-		// Dockerコンテナ一覧を取得
-		containers := monitor.GetDockerContainers()
-
-		// プロジェクトごとにグループ化
-		projects := make(map[string][]monitor.DockerContainer)
-		var standaloneContainers []monitor.DockerContainer
-
-		for _, c := range containers {
-			if c.ComposeProject != "" {
-				projects[c.ComposeProject] = append(projects[c.ComposeProject], c)
-			} else {
-				standaloneContainers = append(standaloneContainers, c)
-			}
+		// デモ用モックデータ: Dockerコンテナ一覧
+		isExpanded, exists := expandedState["my-awesome-app"]
+		if !exists {
+			isExpanded = true // デフォルトで展開
 		}
 
-		// プロジェクトを追加
-		for projectName, containers := range projects {
-			// 既存の展開状態を取得、なければデフォルトでfalse（閉じる）
-			isExpanded, exists := expandedState[projectName]
-			if !exists {
-				isExpanded = false
-			}
+		// プロジェクト
+		m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+			Type:        "project",
+			Name:        "my-awesome-app",
+			ProjectName: "my-awesome-app",
+			IsExpanded:  isExpanded,
+		})
 
-			// プロジェクト自体を追加
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type:        "project",
-				Name:        projectName,
-				ProjectName: projectName,
-				IsExpanded:  isExpanded,
-			})
-
-			// プロジェクト内のコンテナを追加
-			for _, c := range containers {
-				m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-					Type:        "container",
-					Name:        c.Name,
-					ProjectName: c.ComposeProject,
-					ContainerID: c.ID,
-				})
-			}
-		}
-
-		// 単体コンテナを追加
-		for _, c := range standaloneContainers {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type:        "container",
-				Name:        c.Name,
-				ContainerID: c.ID,
-			})
-		}
+		// コンテナ一覧
+		m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+			Type:        "container",
+			Name:        "web-frontend",
+			ProjectName: "my-awesome-app",
+			ContainerID: "mock_web_frontend",
+		})
+		m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+			Type:        "container",
+			Name:        "api-server",
+			ProjectName: "my-awesome-app",
+			ContainerID: "mock_api_server",
+		})
+		m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
+			Type:        "container",
+			Name:        "postgres-db",
+			ProjectName: "my-awesome-app",
+			ContainerID: "mock_postgres_db",
+		})
 
 	case "PostgreSQL":
-		// PostgreSQLデータベース一覧を取得
-		databases := monitor.GetPostgresDatabases()
-		m.cachedPostgresDatabases = databases
-
-		// データベースを追加
-		for _, db := range databases {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type: "database",
-				Name: db.Name,
-			})
-		}
+		// デモ用モックデータ: PostgreSQLデータベース一覧
+		m.rightPanelItems = append(m.rightPanelItems,
+			RightPanelItem{Type: "database", Name: "app_main_db"},
+			RightPanelItem{Type: "database", Name: "app_test_db"},
+			RightPanelItem{Type: "database", Name: "metabase"},
+		)
 
 	case "Node.js":
-		// Node.jsプロセス一覧を取得
-		processes := monitor.GetNodeProcesses()
-		m.cachedNodeProcesses = processes
-
-		// プロセスを追加
-		for _, proc := range processes {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type: "process",
-				Name: proc.PID,
-			})
-		}
+		// デモ用モックデータ: Node.jsプロセス一覧
+		m.rightPanelItems = append(m.rightPanelItems,
+			RightPanelItem{Type: "process", Name: "12345"},
+			RightPanelItem{Type: "process", Name: "12346"},
+		)
 
 	case "MySQL":
-		// MySQLデータベース一覧を取得
-		databases := monitor.GetMySQLDatabases()
-		m.cachedMySQLDatabases = databases
-
-		// データベースを追加
-		for _, db := range databases {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type: "database",
-				Name: db.Name,
-			})
-		}
+		// デモ: MySQL未稼働
+		m.rightPanelItems = []RightPanelItem{}
 
 	case "Redis":
-		// Redisデータベース一覧を取得
-		databases := monitor.GetRedisDatabases()
-		m.cachedRedisDatabases = databases
-
-		// データベースを追加
-		for _, db := range databases {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type: "database",
-				Name: db.Index,
-			})
-		}
+		// デモ: Redis未稼働
+		m.rightPanelItems = []RightPanelItem{}
 
 	case "Python":
-		// Pythonプロセス一覧を取得
-		processes := monitor.GetPythonProcesses()
-		m.cachedPythonProcesses = processes
-
-		// プロセスを追加
-		for _, proc := range processes {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type: "process",
-				Name: proc.PID,
-			})
-		}
+		// デモ用モックデータ: Pythonプロセス一覧
+		m.rightPanelItems = append(m.rightPanelItems,
+			RightPanelItem{Type: "process", Name: "23456"},
+		)
 
 	case "ポート一覧":
-		// ポート一覧を取得
-		ports := monitor.GetListeningPorts()
-		m.cachedPorts = ports
-
-		// ポートを追加
-		for _, port := range ports {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type: "port",
-				Name: port.Port,
-			})
-		}
+		// デモ用モックデータ: ポート一覧
+		m.rightPanelItems = append(m.rightPanelItems,
+			RightPanelItem{Type: "port", Name: "3000"},
+			RightPanelItem{Type: "port", Name: "5432"},
+			RightPanelItem{Type: "port", Name: "8000"},
+			RightPanelItem{Type: "port", Name: "8080"},
+		)
 
 	case "Top 10 プロセス":
-		// Top 10 プロセスを取得
-		processes := monitor.GetTopProcesses(10)
-		m.cachedTopProcesses = processes
-
-		// プロセスを追加
-		for _, proc := range processes {
-			m.rightPanelItems = append(m.rightPanelItems, RightPanelItem{
-				Type:       "process_item",
-				Name:       proc.Name,
-				ProcessPID: proc.PID,
-			})
-		}
+		// デモ用モックデータ: Top 10プロセス
+		m.rightPanelItems = append(m.rightPanelItems,
+			RightPanelItem{Type: "process_item", Name: "node", ProcessPID: "12346"},
+			RightPanelItem{Type: "process_item", Name: "python", ProcessPID: "23456"},
+			RightPanelItem{Type: "process_item", Name: "node", ProcessPID: "12345"},
+			RightPanelItem{Type: "process_item", Name: "docker", ProcessPID: "1234"},
+			RightPanelItem{Type: "process_item", Name: "postgres", ProcessPID: "34567"},
+		)
 
 	default:
-		// その他は選択不可
 		m.rightPanelItems = []RightPanelItem{}
-	}
-
-	// カーソル位置を復元
-	if currentSelectedContainerID != "" || currentSelectedProjectName != "" {
-		for i, item := range m.rightPanelItems {
-			if item.Type == "container" && item.ContainerID == currentSelectedContainerID {
-				m.rightPanelCursor = i
-				break
-			} else if item.Type == "project" && item.Name == currentSelectedProjectName {
-				m.rightPanelCursor = i
-				break
-			}
-		}
 	}
 
 	// カーソル位置が範囲外の場合は調整
@@ -1885,82 +1844,27 @@ func executeCommandCmd(target, action, targetType string) tea.Cmd {
 }
 
 // fetchContainerStatsCmd fetches container stats for all running containers
+// 完全デモモード: 何も取得しない（右パネルのモックデータで十分）
 func (m Model) fetchContainerStatsCmd() tea.Cmd {
-	return func() tea.Msg {
-		containers := monitor.GetDockerContainers()
-
-		// 並列で統計を取得
-		type statsResult struct {
-			containerID string
-			stats       monitor.DockerStats
-			imageSize   string
-		}
-
-		results := make(chan statsResult, len(containers))
-
-		for _, c := range containers {
-			go func(container monitor.DockerContainer) {
-				stats := monitor.GetDockerContainerStats(container.ID)
-				imageSize := monitor.GetDockerImageSize(container.Image)
-
-				results <- statsResult{
-					containerID: container.ID,
-					stats:       stats,
-					imageSize:   imageSize,
-				}
-			}(c)
-		}
-
-		// 全ての結果を収集
-		cacheMap := make(map[string]*ContainerStatsCache)
-		for i := 0; i < len(containers); i++ {
-			result := <-results
-			cacheMap[result.containerID] = &ContainerStatsCache{
-				Stats:     result.stats,
-				ImageSize: result.imageSize,
-				UpdatedAt: time.Now(),
-			}
-		}
-
-		close(results)
-
-		return containerStatsMsg{
-			Containers:     cacheMap,
-			ContainersList: containers,
-		}
-	}
+	return nil
 }
 
 // fetchPortsDataCmd fetches port data
+// 完全デモモード: 何も取得しない
 func (m Model) fetchPortsDataCmd() tea.Cmd {
-	return func() tea.Msg {
-		ports := monitor.GetListeningPorts()
-
-		return portsDataMsg{
-			Ports:     ports,
-			UpdatedAt: time.Now(),
-		}
-	}
+	return nil
 }
 
 // fetchTopProcessesDataCmd fetches top processes data
+// 完全デモモード: 何も取得しない
 func (m Model) fetchTopProcessesDataCmd() tea.Cmd {
-	return func() tea.Msg {
-		processes := monitor.GetTopProcesses(10)
-
-		return topProcessesDataMsg{
-			Processes: processes,
-			UpdatedAt: time.Now(),
-		}
-	}
+	return nil
 }
 
 // fetchPostgresConnectionCmd fetches PostgreSQL connection info asynchronously
+// 完全デモモード: 何も取得しない
 func fetchPostgresConnectionCmd() tea.Cmd {
-	return func() tea.Msg {
-		conn := monitor.GetPostgresConnection()
-		return postgresConnectionMsg(conn)
-	}
+	return nil
 }
 
 // fetchGraphDataCmd はグラフデータを非同期で取得
@@ -2014,6 +1918,7 @@ func (m Model) isServiceDown(serviceName string) bool {
 }
 
 // runProactiveAnalysisCmd はデモ用に特化したAI分析を実行します
+// 完全デモモード: 固定のコンテキストをAIに渡し、確実に正しい復旧コマンドを提案させる
 func (m Model) runProactiveAnalysisCmd(issue string) tea.Cmd {
 	return func() tea.Msg {
 		// デモ用の強力なシステムプロンプト
@@ -2023,8 +1928,23 @@ func (m Model) runProactiveAnalysisCmd(issue string) tea.Cmd {
 解説は短く、必ず実行コマンドを <cmd>...</cmd> タグで囲んで出力してください。
 例: <cmd>docker start postgres-db</cmd>`
 
-		// ユーザーコンテキスト（自動生成）
-		userContext := fmt.Sprintf("緊急アラート: %s\nコンテナの状態を確認し、再起動または修正を行うコマンドを提示してください。", issue)
+		// デモ用固定コンテキスト: 実際のシステム情報を参照せず、台本通りのデータを渡す
+		userContext := `緊急アラート: PostgreSQLデータベースサービスの停止を検知しました。
+
+【検知されたエラー】
+- PostgreSQL: Connection refused on port 5432
+- Dockerコンテナ 'postgres-db' が停止 (Exited with code 1)
+
+【影響を受けているサービス】
+- web-frontend: DB Connection Timeout エラー
+- api-server: ECONNREFUSED 127.0.0.1:5432 エラー
+
+【現在のコンテナ状態】
+- web-frontend [:3000] | Running (エラー発生中)
+- api-server [:8080] | Running (エラー発生中)
+- postgres-db [:5432] | Exited (1) 5 seconds ago
+
+状況を分析し、docker start コマンドでpostgres-dbコンテナを再起動するコマンドを提案してください。`
 
 		// ストリーミング分析開始
 		stream, err := m.aiService.AnalyzeStream(context.Background(), sysPrompt, userContext)
