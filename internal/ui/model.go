@@ -946,36 +946,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		// [a] キーでAI分析開始（AI分析メニュー選択時のみ）
+		// [a] キー: 通常のAI分析 (Ollamaへ問い合わせ)
 		case "a":
 			selectedItem := m.menuItems[m.selectedItem]
 			if selectedItem.Type == "ai" && m.aiState != aiStateLoading {
-				// ▼▼▼ デモモード（平常時）なら即座にモックレスポンスを返す ▼▼▼
-				if m.demoPhase == DemoPhaseNormal {
-					// 即座に成功状態にする
-					m.aiState = aiStateSuccess
-					m.aiResponse = DemoTextAiReportNormal
-					m.aiPendingCmd = "" // コマンドは無し
-
-					// ダイアログとして表示する（ピッチの「レポートが表示される」動作）
-					m.showConfirmDialog = true
-					m.confirmType = "ai_report_normal" // 専用タイプ
-					m.confirmMessage = fmt.Sprintf("🤖 AI Analysis Report\n\n%s", DemoTextAiReportNormal)
-
-					return m, nil
-				}
-				// ▲▲▲ デモモード（平常時）ここまで ▲▲▲
-
+				// Ollama接続チェック
 				if !m.ollamaAvailable {
 					m.aiState = aiStateError
 					m.aiResponse = "Ollamaサーバーに接続できません。\nOllamaが起動しているか確認してください。"
 					return m, nil
 				}
+				// AI分析開始（ポップアップせず、通常のビューで表示）
 				m.aiState = aiStateLoading
 				m.aiResponse = ""
-				m.aiPendingCmd = "" // リセット
-				m.aiCmdResult = ""  // リセット
+				m.aiPendingCmd = ""
+				m.aiCmdResult = ""
 				return m, m.runAIAnalysisCmd()
+			}
+
+		// [Shift+A] (A) キー: デモ用ハードコードレポート (ポップアップなし)
+		case "A":
+			selectedItem := m.menuItems[m.selectedItem]
+			if selectedItem.Type == "ai" {
+				// 即座に成功状態にし、ハードコードされたテキストを表示
+				m.aiState = aiStateSuccess
+				m.aiResponse = DemoTextAiReportNormal
+				m.aiPendingCmd = ""
+				// showConfirmDialogはtrueにせず、メイン画面（AIビュー）に結果を表示して終了
+				return m, nil
 			}
 
 		// [tab] キーでモデル切り替え（AI分析メニュー選択時のみ）
@@ -1224,9 +1222,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// コマンド実行結果の受信
+	// AIコマンド実行結果の受信（修正箇所：デモフェーズの更新を追加）
 	case cmdExecMsg:
 		m.aiCmdResult = msg.Result
+
+		// ▼▼▼ 修正: AIによる復旧コマンドが成功したら、デモフェーズを「復旧」へ移行する ▼▼▼
+		if m.demoPhase == DemoPhaseBroken {
+			m.demoPhase = DemoPhaseFixed
+			m.message = "✅ System Recovered via AI Automation" // メッセージを復旧完了へ
+		}
+		// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 		// 実行後に最新の状態を反映するため、全サービス再取得をトリガー
 		return m, m.fetchAllServicesCmd()
 
