@@ -38,6 +38,10 @@ type DockerContainer struct {
 	Ports   string `json:"ports"`
 	MemUsed string `json:"mem_used"` // docker statsから取得
 	CPUUsed string `json:"cpu_used"` // docker statsから取得
+	// ▼ 障害診断用の詳細メタデータ（docker inspect から取得）
+	ExitCode  int    `json:"exit_code"`
+	OOMKilled bool   `json:"oom_killed"`
+	Error     string `json:"error"` // Dockerが吐くエラーメッセージがあれば
 }
 
 // DockerContext はDocker関連情報を構造化して保持します
@@ -171,8 +175,8 @@ func getDiskUsage() (float64, float64) {
 
 // CollectDockerContext はDocker情報をコマンドから直接収集します
 func CollectDockerContext() (*DockerContext, error) {
-	// docker ps でIDを取得
-	cmd := exec.Command("docker", "ps", "--format", "{{.ID}}|{{.Image}}|{{.Status}}|{{.Names}}|{{.Ports}}")
+	// docker ps -a でIDを取得（-a オプションで停止コンテナも取得）
+	cmd := exec.Command("docker", "ps", "-a", "--format", "{{.ID}}|{{.Image}}|{{.Status}}|{{.Names}}|{{.Ports}}")
 	output, err := cmd.Output()
 
 	// Dockerが起動していない場合
@@ -201,15 +205,37 @@ func CollectDockerContext() (*DockerContext, error) {
 		}
 
 		// リソース情報の取得 (docker stats --no-stream)
-		// 個別に叩くと重いが、正確性のために取得（必要に応じて非同期化すべき箇所）
-		statsCmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.MemUsage}}|{{.CPUPerc}}", c.ID)
-		if statsOut, err := statsCmd.Output(); err == nil {
-			statsParts := strings.Split(strings.TrimSpace(string(statsOut)), "|")
-			if len(statsParts) >= 2 {
-				c.MemUsed = statsParts[0]
-				c.CPUUsed = statsParts[1]
+		// 実行中の場合のみ取得（停止コンテナはstatsが取れない）
+		if strings.Contains(c.Status, "Up") {
+			statsCmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.MemUsage}}|{{.CPUPerc}}", c.ID)
+			if statsOut, err := statsCmd.Output(); err == nil {
+				statsParts := strings.Split(strings.TrimSpace(string(statsOut)), "|")
+				if len(statsParts) >= 2 {
+					c.MemUsed = statsParts[0]
+					c.CPUUsed = statsParts[1]
+				}
 			}
 		}
+
+		// ▼▼▼ 障害診断 (docker inspect) ▼▼▼
+		// 停止(Exited)または死んでいる(Dead)コンテナの詳細を検査
+		if strings.Contains(c.Status, "Exited") || strings.Contains(c.Status, "Dead") {
+			// ExitCode, OOMKilled, Error を取得
+			inspectCmd := exec.Command("docker", "inspect", "--format", "{{.State.ExitCode}}|{{.State.OOMKilled}}|{{.State.Error}}", c.ID)
+			if inspectOut, err := inspectCmd.Output(); err == nil {
+				// 出力例: "137|true|"
+				insParts := strings.Split(strings.TrimSpace(string(inspectOut)), "|")
+				if len(insParts) >= 3 {
+					// ExitCodeのパース
+					fmt.Sscanf(insParts[0], "%d", &c.ExitCode)
+					// OOMKilledの判定
+					c.OOMKilled = (insParts[1] == "true")
+					// エラーメッセージ
+					c.Error = insParts[2]
+				}
+			}
+		}
+		// ▲▲▲ 障害診断ここまで ▲▲▲
 
 		containers = append(containers, c)
 	}
@@ -482,13 +508,31 @@ func FormatAsMarkdown(ctx interface{}) (string, error) {
 	if !c.Docker.IsRunning {
 		sb.WriteString("Docker is not running.\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("Running Containers: %d\n", c.Docker.Count))
+		sb.WriteString(fmt.Sprintf("Containers: %d\n", c.Docker.Count))
 		if len(c.Docker.Containers) > 0 {
-			sb.WriteString("| ID | Image | Status | Ports | CPU | Mem |\n")
-			sb.WriteString("|---|---|---|---|---|---|\n")
+			// ▼ テーブルヘッダーに Info 列を追加
+			sb.WriteString("| ID | Image | Status | Ports | CPU | Mem | Info |\n")
+			sb.WriteString("|---|---|---|---|---|---|---|\n")
 			for _, cnt := range c.Docker.Containers {
-				sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s |\n",
-					cnt.ID[:4], cnt.Image, cnt.Status, cnt.Ports, cnt.CPUUsed, cnt.MemUsed))
+				// ▼ 診断情報の整形
+				info := ""
+				if cnt.OOMKilled {
+					info = "⚠️ **OOM KILLED**"
+				} else if cnt.ExitCode != 0 {
+					info = fmt.Sprintf("Exit: %d", cnt.ExitCode)
+					if cnt.Error != "" {
+						info += fmt.Sprintf(" (%s)", cnt.Error)
+					}
+				}
+
+				// IDが短い場合の対策
+				idShort := cnt.ID
+				if len(idShort) > 4 {
+					idShort = idShort[:4]
+				}
+
+				sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |\n",
+					idShort, cnt.Image, cnt.Status, cnt.Ports, cnt.CPUUsed, cnt.MemUsed, info))
 			}
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/Masahide-S/bho_hacka_go/internal/ai"
@@ -575,6 +576,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
+		// ▼▼▼ デモ用隠しトリガー (Shift + E) ▼▼▼
+		// プレゼンの「ここでトラブル発生！」というセリフに合わせて押す
+		case "E":
+			if m.demoPhase == DemoPhaseNormal {
+				m.demoPhase = DemoPhaseBroken
+				m.message = "⚠️ DEMO: Injecting System Failure..."
+				// 全サービスの状態を即座に更新して赤色表示にする
+				return m, tea.Batch(
+					m.fetchAllServicesCmd(),
+					tea.Batch(m.updateServiceStatusCmd()...),
+				)
+			}
+			return m, nil
+		// ▲▲▲ デモ用隠しトリガーここまで ▲▲▲
+
 		// ESC: グラフモードから戻る、またはダイアログを閉じる
 		case "esc":
 			if m.currentView != viewMonitor {
@@ -616,12 +632,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.message = "Loading 3-Day History..."
 				return m, m.fetchGraphDataCmd(viewGraphHistory)
 			}
-			// 左パネルにいる場合はヒストリーグラフへ
-			if m.focusedPanel == "left" && !m.showConfirmDialog && !m.showLogView {
-				m.currentView = viewGraphHistory
-				m.message = "Loading 3-Day History..."
-				return m, m.fetchGraphDataCmd(viewGraphHistory)
-			}
+			// // 左パネルにいる場合はヒストリーグラフへ
+			// if m.focusedPanel == "left" && !m.showConfirmDialog && !m.showLogView {
+			// 	m.currentView = viewGraphHistory
+			// 	m.message = "Loading 3-Day History..."
+			// 	return m, m.fetchGraphDataCmd(viewGraphHistory)
+			// }
 			// 右パネルにいる場合は左パネルへ戻る
 			if m.focusedPanel == "right" {
 				m.focusedPanel = "left"
@@ -979,16 +995,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tick())
 
 		// ▼▼▼ デモシナリオ進行 ▼▼▼
-		// 起動から5秒後(tickCount=5)に、強制的に「異常フェーズ」へ移行
-		if m.tickCount == 5 && m.demoPhase == DemoPhaseNormal {
-			m.demoPhase = DemoPhaseBroken
-			// フェーズが変わったので即座に全サービスの状態を更新してUIに反映
-			return m, tea.Batch(
-				m.fetchAllServicesCmd(),
-				tea.Batch(m.updateServiceStatusCmd()...),
-				tick(), // tickも継続
-			)
-		}
+		// 自動遷移を廃止: 手動トリガー(Shift+E)に変更
+		// プレゼン中に「ここでトラブルが発生します！」と言いながら E キーを押す運用
 		// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 		// 毎秒: サービス起動/停止チェック（非同期コマンドに変更）
@@ -1291,10 +1299,24 @@ func (m Model) runAIAnalysisCmd() tea.Cmd {
 	}
 }
 
-// executePendingCmd はシェル経由でコマンドを実行
+// executePendingCmd はコマンドを実行します（デモ用にモック化）
 func executePendingCmd(command string) tea.Cmd {
 	return func() tea.Msg {
-		// sh -c を使うことでパイプやリダイレクトを含むコマンドも実行可能
+		// ▼▼▼ デモ用モック: 特定のコマンドを検知して「成功」を偽装 ▼▼▼
+		// AIが提案するコマンド "docker start postgres-db" が含まれていれば成功扱いにする
+		if strings.Contains(command, "postgres-db") || strings.Contains(command, "docker start") {
+			// リアル感を出すために少し待機 (800ms)
+			time.Sleep(800 * time.Millisecond)
+
+			// 成功メッセージを返す
+			successOutput := "postgres-db\nRunning...\nCheck logs for details."
+			result := fmt.Sprintf("✓ 実行成功 (Demo):\n%s", successOutput)
+
+			return cmdExecMsg{Result: result}
+		}
+		// ▲▲▲ デモ用モックここまで ▲▲▲
+
+		// それ以外のコマンドは実際に実行
 		cmd := exec.Command("sh", "-c", command)
 		output, err := cmd.CombinedOutput()
 
@@ -1921,28 +1943,39 @@ func (m Model) isServiceDown(serviceName string) bool {
 // 完全デモモード: 固定のコンテキストをAIに渡し、確実に正しい復旧コマンドを提案させる
 func (m Model) runProactiveAnalysisCmd(issue string) tea.Cmd {
 	return func() tea.Msg {
-		// デモ用の強力なシステムプロンプト
+		// デモ用の強力なシステムプロンプト（強化版）
 		sysPrompt := `あなたは優秀なSRE(Site Reliability Engineer)です。
 システムに発生した障害を検知しました。
 即座に状況を分析し、復旧のためのDockerコマンドを提示してください。
-解説は短く、必ず実行コマンドを <cmd>...</cmd> タグで囲んで出力してください。
-例: <cmd>docker start postgres-db</cmd>`
+
+重要ルール:
+1. 解説は極めて短くすること（1行程度）。
+2. 必ず実行コマンドを <cmd> と </cmd> のタグで囲んで出力すること。
+3. 余計なマークダウン装飾はしないこと。
+
+回答例:
+PostgreSQLコンテナが停止しています。再起動します。
+<cmd>docker start postgres-db</cmd>`
 
 		// デモ用固定コンテキスト: 実際のシステム情報を参照せず、台本通りのデータを渡す
+		// 実際のデータ収集結果（docker inspect による OOM KILLED 検出）を反映した体裁
 		userContext := `緊急アラート: PostgreSQLデータベースサービスの停止を検知しました。
 
 【検知されたエラー】
 - PostgreSQL: Connection refused on port 5432
-- Dockerコンテナ 'postgres-db' が停止 (Exited with code 1)
+- Dockerコンテナ 'postgres-db' が停止 (Exited with code 137)
+  └─ Info: ⚠️ **OOM KILLED** (メモリ不足によるプロセス強制終了)
 
 【影響を受けているサービス】
 - web-frontend: DB Connection Timeout エラー
 - api-server: ECONNREFUSED 127.0.0.1:5432 エラー
 
 【現在のコンテナ状態】
-- web-frontend [:3000] | Running (エラー発生中)
-- api-server [:8080] | Running (エラー発生中)
-- postgres-db [:5432] | Exited (1) 5 seconds ago
+| ID | Image | Status | Ports | CPU | Mem | Info |
+|---|---|---|---|---|---|---|
+| a1b2 | node:18 | Up 2h | :3000 | 2.1% | 128MB | |
+| c3d4 | node:18 | Up 2h | :8080 | 5.3% | 256MB | |
+| e5f6 | postgres:15 | Exited (137) 5s | :5432 | - | - | ⚠️ **OOM KILLED** |
 
 状況を分析し、docker start コマンドでpostgres-dbコンテナを再起動するコマンドを提案してください。`
 
