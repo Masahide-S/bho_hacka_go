@@ -7,12 +7,12 @@ import (
 	"regexp"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Masahide-S/bho_hacka_go/internal/ai"
 	"github.com/Masahide-S/bho_hacka_go/internal/db"
 	"github.com/Masahide-S/bho_hacka_go/internal/llm"
 	"github.com/Masahide-S/bho_hacka_go/internal/logger"
 	"github.com/Masahide-S/bho_hacka_go/internal/monitor"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // 画面モードの定義
@@ -23,6 +23,22 @@ const (
 	viewGraphRealtime           // 直近詳細グラフ (gキー)
 	viewGraphHistory            // 3日間トレンド (hキー)
 )
+
+// ▼▼▼ デモ用の定義を追加 ▼▼▼
+// デモの進行フェーズ定義
+const (
+	DemoPhaseNormal = 0 // 正常（初期状態）
+	DemoPhaseBroken = 1 // 異常発生（PostgreSQL停止）
+	DemoPhaseFixed  = 2 // 復旧完了
+)
+
+// デモ用の偽データ（異常時）
+const (
+	DemoDataPostgresBroken = "✗ PostgreSQL: 停止中\n  ⚠ 接続エラー: Connection refused on port 5432"
+	DemoDataDockerBroken   = "✓ Docker: 実行中\n  - web-frontend [:3000] | Running\n    └─ Error: DB Connection Timeout\n  - postgres-db [] | Exited (1) 5 seconds ago\n    └─ Mount: /var/lib/postgresql/data"
+)
+
+// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 // graphDataMsg はグラフデータ取得完了時のメッセージ
 type graphDataMsg struct {
@@ -113,25 +129,25 @@ type Model struct {
 	systemResources monitor.SystemResources
 
 	// Cache
-	serviceCache            map[string]*ServiceCache
-	containerStatsCache     map[string]*ContainerStatsCache // コンテナID -> 統計キャッシュ
-	cachedContainers        []monitor.DockerContainer       // コンテナリストのキャッシュ
-	cachedPostgresDatabases []monitor.PostgresDatabase      // PostgreSQLデータベースのキャッシュ
-	cachedMySQLDatabases    []monitor.MySQLDatabase         // MySQLデータベースのキャッシュ
-	cachedRedisDatabases    []monitor.RedisDatabase         // Redisデータベースのキャッシュ
-	cachedNodeProcesses     []monitor.NodeProcess           // Node.jsプロセスのキャッシュ
-	cachedPythonProcesses   []monitor.PythonProcess         // Pythonプロセスのキャッシュ
-	cachedPorts             []monitor.PortInfo              // ポート一覧のキャッシュ
-	cachedPortsUpdatedAt    time.Time                       // ポート一覧の最終更新時刻
-	cachedTopProcesses         []monitor.ProcessInfo           // Top 10プロセスのキャッシュ
-	cachedPostgresConnection   monitor.PostgresConnection      // PostgreSQL接続情報のキャッシュ
-	tickCount                  int
+	serviceCache             map[string]*ServiceCache
+	containerStatsCache      map[string]*ContainerStatsCache // コンテナID -> 統計キャッシュ
+	cachedContainers         []monitor.DockerContainer       // コンテナリストのキャッシュ
+	cachedPostgresDatabases  []monitor.PostgresDatabase      // PostgreSQLデータベースのキャッシュ
+	cachedMySQLDatabases     []monitor.MySQLDatabase         // MySQLデータベースのキャッシュ
+	cachedRedisDatabases     []monitor.RedisDatabase         // Redisデータベースのキャッシュ
+	cachedNodeProcesses      []monitor.NodeProcess           // Node.jsプロセスのキャッシュ
+	cachedPythonProcesses    []monitor.PythonProcess         // Pythonプロセスのキャッシュ
+	cachedPorts              []monitor.PortInfo              // ポート一覧のキャッシュ
+	cachedPortsUpdatedAt     time.Time                       // ポート一覧の最終更新時刻
+	cachedTopProcesses       []monitor.ProcessInfo           // Top 10プロセスのキャッシュ
+	cachedPostgresConnection monitor.PostgresConnection      // PostgreSQL接続情報のキャッシュ
+	tickCount                int
 
 	// Right panel navigation
-	focusedPanel     string            // "left" or "right"
-	rightPanelCursor int               // 右パネルのカーソル位置
-	rightPanelItems  []RightPanelItem  // 右パネルの選択可能な項目
-	detailScroll     int               // 詳細情報のスクロール位置
+	focusedPanel     string           // "left" or "right"
+	rightPanelCursor int              // 右パネルのカーソル位置
+	rightPanelItems  []RightPanelItem // 右パネルの選択可能な項目
+	detailScroll     int              // 詳細情報のスクロール位置
 
 	// Command execution
 	showConfirmDialog bool
@@ -145,7 +161,6 @@ type Model struct {
 	logContent    string
 	logScroll     int
 	logTargetName string // ログ表示対象の名前
-
 
 	// AI関連フィールド
 	aiService    *ai.Service
@@ -176,10 +191,10 @@ type Model struct {
 	hasProactiveAlertShown bool   // デモ中に一度だけ発動させるためのフラグ
 	proactiveMode          bool   // 自動分析モード中かどうか
 	confirmMessage         string // ダイアログに表示する動的なメッセージ
+
+	// ▼ デモ用フィールドを追加
+	demoPhase int // 現在のデモフェーズ
 }
-
-
-
 
 // AIの状態を表す定数
 const (
@@ -198,7 +213,6 @@ type aiAnalysisMsg struct {
 // cmdExecMsg はコマンド実行結果を運ぶメッセージ
 type cmdExecMsg struct {
 	Result string
-
 }
 
 // ストリーミング開始を通知するメッセージ
@@ -231,7 +245,6 @@ type serviceStatusResultMsg struct {
 // コマンド抽出用の正規表現
 var cmdRegex = regexp.MustCompile(`<cmd>(.*?)</cmd>`)
 
-
 // InitialModel returns the initial model (for backward compatibility)
 func InitialModel() Model {
 	return InitialModelWithStore(nil)
@@ -256,45 +269,47 @@ func InitialModelWithStore(store *db.Store) Model {
 			{Name: "Top 10 プロセス", Type: "info", Status: ""},
 			{Name: "システムリソース", Type: "info", Status: ""},
 		},
-		aiIssueCount:           0,
-		systemResources:        monitor.GetSystemResources(),
-		serviceCache:           make(map[string]*ServiceCache),
-		containerStatsCache:    make(map[string]*ContainerStatsCache),
-		cachedContainers:       []monitor.DockerContainer{},
+		aiIssueCount:            0,
+		systemResources:         monitor.GetSystemResources(),
+		serviceCache:            make(map[string]*ServiceCache),
+		containerStatsCache:     make(map[string]*ContainerStatsCache),
+		cachedContainers:        []monitor.DockerContainer{},
 		cachedPostgresDatabases: []monitor.PostgresDatabase{},
-		cachedMySQLDatabases:   []monitor.MySQLDatabase{},
-		cachedRedisDatabases:   []monitor.RedisDatabase{},
-		cachedNodeProcesses:    []monitor.NodeProcess{},
-		cachedPythonProcesses:  []monitor.PythonProcess{},
-		cachedTopProcesses:     []monitor.ProcessInfo{},
-		tickCount:              0,
-		focusedPanel:           "left",
-		rightPanelCursor:       0,
-		rightPanelItems:        []RightPanelItem{},
-		detailScroll:           0,
-		showConfirmDialog:      false,
-		confirmAction:          "",
-		confirmTarget:          "",
-		confirmType:            "",
-		lastCommandResult:      "",
-		showLogView:            false,
-		logContent:             "",
-		logScroll:              0,
-		logTargetName:          "",
-		aiService:              ai.NewService(),
-		aiState:                aiStateIdle,
-		aiPendingCmd:           "",
-		aiCmdResult:            "",
-		ollamaAvailable:        false,
-		availableModels:        []string{},
-		selectedModel:          0,
-		dbStore:                store,
-		dbChan:                 make(chan monitor.FullSnapshot, 50), // バッファを持たせる
-		currentView:            viewMonitor,
+		cachedMySQLDatabases:    []monitor.MySQLDatabase{},
+		cachedRedisDatabases:    []monitor.RedisDatabase{},
+		cachedNodeProcesses:     []monitor.NodeProcess{},
+		cachedPythonProcesses:   []monitor.PythonProcess{},
+		cachedTopProcesses:      []monitor.ProcessInfo{},
+		tickCount:               0,
+		focusedPanel:            "left",
+		rightPanelCursor:        0,
+		rightPanelItems:         []RightPanelItem{},
+		detailScroll:            0,
+		showConfirmDialog:       false,
+		confirmAction:           "",
+		confirmTarget:           "",
+		confirmType:             "",
+		lastCommandResult:       "",
+		showLogView:             false,
+		logContent:              "",
+		logScroll:               0,
+		logTargetName:           "",
+		aiService:               ai.NewService(),
+		aiState:                 aiStateIdle,
+		aiPendingCmd:            "",
+		aiCmdResult:             "",
+		ollamaAvailable:         false,
+		availableModels:         []string{},
+		selectedModel:           0,
+		dbStore:                 store,
+		dbChan:                  make(chan monitor.FullSnapshot, 50), // バッファを持たせる
+		currentView:             viewMonitor,
 		// Proactive Demo Features
 		hasProactiveAlertShown: false,
 		proactiveMode:          false,
 		confirmMessage:         "",
+		// ▼ デモ初期化: 最初は正常(0)からスタート
+		demoPhase: DemoPhaseNormal,
 	}
 
 	// 裏方（DBワーカー）を始動
@@ -316,7 +331,6 @@ func (m Model) startDBWorker() {
 		}
 	}
 }
-
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
@@ -364,12 +378,15 @@ func waitForStreamResponse(sub <-chan llm.GenerateResponseStream) tea.Cmd {
 	}
 }
 
-
 // updateServiceStatusCmd はサービス状態を非同期でチェックするコマンドを生成します
-func updateServiceStatusCmd(menuItems []MenuItem) []tea.Cmd {
+// 変更: メソッドレシーバ (m Model) を追加し、デモフェーズを参照できるように変更
+func (m Model) updateServiceStatusCmd() []tea.Cmd {
 	var cmds []tea.Cmd
 
-	for i, item := range menuItems {
+	// デモフェーズをキャプチャ
+	currentPhase := m.demoPhase
+
+	for i, item := range m.menuItems {
 		if item.Type != "service" {
 			continue
 		}
@@ -379,6 +396,16 @@ func updateServiceStatusCmd(menuItems []MenuItem) []tea.Cmd {
 		serviceName := item.Name
 
 		cmds = append(cmds, func() tea.Msg {
+			// ▼▼▼ デモ用ハイジャックロジック ▼▼▼
+			// フェーズが「異常(1)」で、対象がPostgreSQLなら強制的に「✗」を返す
+			if currentPhase == DemoPhaseBroken && serviceName == "PostgreSQL" {
+				return serviceStatusResultMsg{
+					Index:  index,
+					Status: "✗", // 強制エラー
+				}
+			}
+			// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 			var processName string
 			switch serviceName {
 			case "PostgreSQL":
@@ -402,6 +429,16 @@ func updateServiceStatusCmd(menuItems []MenuItem) []tea.Cmd {
 
 			status := "✗"
 			if isRunning {
+				status = "✓"
+			}
+
+			// デモの安定性のため、フェーズ0, 2の場合は（実際の状態に関わらず）✓を返して安定させることも可能だが
+			// ここでは実際のステータスを優先しつつ、デモシナリオが壊れないようにする
+			// フェーズ0(Normal)または2(Fixed)のときは、基本的には動いている前提のシナリオだが、
+			// 実際の環境で動いていないと困るので、ここではモックはBroken時のみにする。
+			// もし環境依存を完全になくすなら、ここも "✓" 固定にする。
+			// 念のため、Postgresだけはフェーズ0,2なら強制✓にする
+			if serviceName == "PostgreSQL" && (currentPhase == DemoPhaseNormal || currentPhase == DemoPhaseFixed) {
 				status = "✓"
 			}
 
@@ -858,12 +895,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		cmds = append(cmds, tick())
 
+		// ▼▼▼ デモシナリオ進行 ▼▼▼
+		// 起動から5秒後(tickCount=5)に、強制的に「異常フェーズ」へ移行
+		if m.tickCount == 5 && m.demoPhase == DemoPhaseNormal {
+			m.demoPhase = DemoPhaseBroken
+			// フェーズが変わったので即座に全サービスの状態を更新してUIに反映
+			return m, tea.Batch(
+				m.fetchAllServicesCmd(),
+				tea.Batch(m.updateServiceStatusCmd()...),
+				tick(), // tickも継続
+			)
+		}
+		// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 		// 毎秒: サービス起動/停止チェック（非同期コマンドに変更）
-		cmds = append(cmds, updateServiceStatusCmd(m.menuItems)...)
+		// m.updateServiceStatusCmd() の呼び出しに変更
+		cmds = append(cmds, m.updateServiceStatusCmd()...)
 
 		// ▼▼▼ プロアクティブ監視ロジック ▼▼▼
 		// 3秒に1回チェック & まだアラートを出していない & AI分析中でない場合
-		if m.tickCount%3 == 0 && !m.hasProactiveAlertShown && m.aiState != aiStateLoading && m.ollamaAvailable {
+		// デモ中は「異常フェーズ(Broken)」のときのみ発動するように条件を追加
+		if m.tickCount%3 == 0 && !m.hasProactiveAlertShown && m.aiState != aiStateLoading && m.ollamaAvailable && m.demoPhase == DemoPhaseBroken {
 			// デモシナリオ: PostgreSQLが落ちていたら発動
 			if m.isServiceDown("PostgreSQL") {
 				m.hasProactiveAlertShown = true // フラグを立てて連打防止
@@ -987,6 +1039,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// コマンド実行結果を保存
 		m.lastCommandResult = msg.message
 
+		// ▼▼▼ 復旧フェーズへの移行 ▼▼▼
+		// コマンドが成功したか、または異常フェーズだった場合は「復旧フェーズ」へ
+		if msg.success || m.demoPhase == DemoPhaseBroken {
+			m.demoPhase = DemoPhaseFixed
+		}
+		// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 		// 選択中のサービスに応じて更新
 		selectedItem := m.menuItems[m.selectedItem]
 		var updateCmds []tea.Cmd
@@ -1004,6 +1063,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		updateCmds = append(updateCmds,
 			m.fetchSelectedServiceCmd(),
+			// 状態アイコンの更新もかける
+			tea.Batch(m.updateServiceStatusCmd()...),
 			tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
 				return clearCommandResultMsg{}
 			}),
@@ -1117,7 +1178,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.proactiveMode = false // モード終了
 				m.showConfirmDialog = true
 				m.confirmType = "ai_proactive" // 専用の確認タイプ
-				m.message = "" // メッセージをクリア
+				m.message = ""                 // メッセージをクリア
 
 				// ダイアログメッセージの構築
 				if m.aiPendingCmd != "" {
@@ -1218,11 +1279,11 @@ func (m Model) fetchSelectedServiceCmd() tea.Cmd {
 
 	// キャッシュの有効期限を種類別に設定
 	var cacheValidDuration time.Duration
-	
+
 	if selectedItem.Type == "service" {
-		cacheValidDuration = 3 * time.Second  // サービス: 3秒
+		cacheValidDuration = 3 * time.Second // サービス: 3秒
 	} else if selectedItem.Type == "info" {
-		cacheValidDuration = 5 * time.Second  // 情報: 5秒
+		cacheValidDuration = 5 * time.Second // 情報: 5秒
 	}
 
 	// キャッシュが新しければスキップ
@@ -1249,7 +1310,7 @@ func (m Model) fetchSelectedServiceCmd() tea.Cmd {
 		}
 	}
 
-	return fetchServiceDataCmd(serviceName)
+	return m.fetchServiceDataCmd(serviceName)
 }
 
 // fetchAllServicesCmd fetches all services data in background
@@ -1258,7 +1319,7 @@ func (m Model) fetchAllServicesCmd() tea.Cmd {
 
 	for _, item := range m.menuItems {
 		if item.Type == "service" || item.Type == "info" {
-			cmds = append(cmds, fetchServiceDataCmd(item.Name))
+			cmds = append(cmds, m.fetchServiceDataCmd(item.Name))
 		}
 	}
 
@@ -1266,9 +1327,23 @@ func (m Model) fetchAllServicesCmd() tea.Cmd {
 }
 
 // fetchServiceDataCmd fetches service data asynchronously
-func fetchServiceDataCmd(serviceName string) tea.Cmd {
+// 変更: メソッドレシーバ (m Model) を追加し、デモフェーズを参照できるように変更
+func (m Model) fetchServiceDataCmd(serviceName string) tea.Cmd {
 	return func() tea.Msg {
 		var data string
+
+		// ▼▼▼ デモ用ハイジャックロジック ▼▼▼
+		if m.demoPhase == DemoPhaseBroken {
+			if serviceName == "PostgreSQL" {
+				data = DemoDataPostgresBroken
+				return serviceDataMsg{ServiceName: serviceName, Data: data, UpdatedAt: time.Now()}
+			}
+			if serviceName == "Docker" {
+				data = DemoDataDockerBroken
+				return serviceDataMsg{ServiceName: serviceName, Data: data, UpdatedAt: time.Now()}
+			}
+		}
+		// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 		switch serviceName {
 		case "PostgreSQL":
@@ -1288,7 +1363,7 @@ func fetchServiceDataCmd(serviceName string) tea.Cmd {
 		case "システムリソース":
 			// 詳細なシステムリソース情報
 			sr := monitor.GetSystemResources()
-			topProcs := monitor.GetTopProcesses(5)  // TOP5
+			topProcs := monitor.GetTopProcesses(5) // TOP5
 			devProcs := monitor.GetDevProcesses()
 
 			data = fmt.Sprintf(`システムリソース
@@ -1296,21 +1371,21 @@ func fetchServiceDataCmd(serviceName string) tea.Cmd {
 全体:
   CPU: %.1f%%
   メモリ: %.1fGB / %.1fGB (%.0f%%)
-  			
+
 TOP5 リソース使用:
 %s
 開発プロセス:
 %s`,
-					sr.CPUUsage,
-					float64(sr.MemoryUsed)/1024.0,
-					float64(sr.MemoryTotal)/1024.0,
-					sr.MemoryPerc,
-					monitor.FormatTopProcesses(topProcs),
-					monitor.FormatDevProcesses(devProcs),
-				)
-			default:
-				data = serviceName + " のデータ"
-			}
+				sr.CPUUsage,
+				float64(sr.MemoryUsed)/1024.0,
+				float64(sr.MemoryTotal)/1024.0,
+				sr.MemoryPerc,
+				monitor.FormatTopProcesses(topProcs),
+				monitor.FormatDevProcesses(devProcs),
+			)
+		default:
+			data = serviceName + " のデータ"
+		}
 
 		return serviceDataMsg{
 			ServiceName: serviceName,
@@ -1333,7 +1408,7 @@ func (m Model) fetchNonSelectedServicesCmd() tea.Cmd {
 		}
 
 		if item.Type == "service" || item.Type == "info" {
-			cmds = append(cmds, fetchServiceDataCmd(item.Name))
+			cmds = append(cmds, m.fetchServiceDataCmd(item.Name))
 		}
 	}
 
