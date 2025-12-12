@@ -135,6 +135,13 @@ TOP5 リソース使用:
   3. node (PID 12345) - CPU: 2.1%% MEM: 150MB
   4. docker (PID 1234) - CPU: 1.5%% MEM: 512MB
   5. postgres (PID 34567) - CPU: 1.2%% MEM: 256MB`
+
+	// AIレポート（平常時）
+	DemoTextAiReportNormal = `# 📊 System Health Report
+- **Status:** All Systems Operational (Green)
+- **Resources:** CPU 12%, Mem 3.4GB (Stable)
+- **Docker:** 3 Containers Running
+- **Advice:** 依存パッケージの脆弱性もありません。開発を開始できます。`
 )
 
 // ▲▲▲ 完全デモモード用の定義 ▲▲▲
@@ -910,6 +917,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				// ▲▲▲ AIプロアクティブ修復ここまで ▲▲▲
 
+				// ▼ 平常時レポートの場合は y を押しても閉じるだけにする (誤動作防止) ▼
+				if m.confirmType == "ai_report_normal" {
+					m.showConfirmDialog = false
+					m.confirmMessage = ""
+					m.confirmType = ""
+					return m, nil
+				}
+				// ▲ 追加ここまで ▲
+
 				return m.executeCommand()
 			}
 
@@ -934,6 +950,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			selectedItem := m.menuItems[m.selectedItem]
 			if selectedItem.Type == "ai" && m.aiState != aiStateLoading {
+				// ▼▼▼ デモモード（平常時）なら即座にモックレスポンスを返す ▼▼▼
+				if m.demoPhase == DemoPhaseNormal {
+					// 即座に成功状態にする
+					m.aiState = aiStateSuccess
+					m.aiResponse = DemoTextAiReportNormal
+					m.aiPendingCmd = "" // コマンドは無し
+
+					// ダイアログとして表示する（ピッチの「レポートが表示される」動作）
+					m.showConfirmDialog = true
+					m.confirmType = "ai_report_normal" // 専用タイプ
+					m.confirmMessage = fmt.Sprintf("🤖 AI Analysis Report\n\n%s", DemoTextAiReportNormal)
+
+					return m, nil
+				}
+				// ▲▲▲ デモモード（平常時）ここまで ▲▲▲
+
 				if !m.ollamaAvailable {
 					m.aiState = aiStateError
 					m.aiResponse = "Ollamaサーバーに接続できません。\nOllamaが起動しているか確認してください。"
