@@ -3,9 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/Masahide-S/bho_hacka_go/internal/ai"
@@ -163,6 +161,9 @@ type serviceDataMsg struct {
 
 // clearCommandResultMsg is sent to clear command result message
 type clearCommandResultMsg struct{}
+
+// clearAiCmdResultMsg はAIコマンド結果を消去するためのメッセージ型
+type clearAiCmdResultMsg struct{}
 
 // containerStatsMsg is sent when container stats are fetched
 type containerStatsMsg struct {
@@ -557,17 +558,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// AIのコマンド実行待ち状態の時のキー操作
 		if m.aiPendingCmd != "" {
 			switch msg.String() {
+			// ▼▼▼ 修正: Enterキー押下時もダイアログを閉じる処理を追加 ▼▼▼
 			case "enter":
+				// ダイアログを強制的に閉じる（吸われ防止）
+				if m.showConfirmDialog {
+					m.showConfirmDialog = false
+					m.confirmAction = ""
+					m.confirmTarget = ""
+					m.confirmMessage = ""
+					m.confirmType = ""
+				}
+
 				// コマンド実行
 				cmdStr := m.aiPendingCmd
 				m.aiPendingCmd = ""
 				m.aiCmdResult = fmt.Sprintf("実行中: %s...", cmdStr)
 				return m, executePendingCmd(cmdStr)
 
+			// ▼▼▼ 追加: y/Yキーでも実行できるようにする（吸われ防止） ▼▼▼
+			case "y", "Y":
+				// ダイアログを強制的に閉じる
+				if m.showConfirmDialog {
+					m.showConfirmDialog = false
+					m.confirmAction = ""
+					m.confirmTarget = ""
+					m.confirmMessage = ""
+					m.confirmType = ""
+				}
+
+				// コマンド実行（Enterと同じ処理）
+				cmdStr := m.aiPendingCmd
+				m.aiPendingCmd = ""
+				m.aiCmdResult = fmt.Sprintf("実行中: %s...", cmdStr)
+				return m, executePendingCmd(cmdStr)
+			// ▲▲▲ 追加ここまで ▲▲▲
+
 			case "esc", "n":
 				// キャンセル
 				m.aiPendingCmd = ""
 				m.aiCmdResult = "コマンド実行をキャンセルしました。"
+
+				// ▼▼▼ 追加: 入力が吸われないよう、ダイアログもここで強制的に閉じる ▼▼▼
+				if m.showConfirmDialog {
+					m.showConfirmDialog = false
+					m.confirmAction = ""
+					m.confirmTarget = ""
+					m.confirmMessage = ""
+					m.confirmType = ""
+				}
+				// ▲▲▲ 追加ここまで ▲▲▲
+
 				return m, nil
 
 			case "q", "ctrl+c":
@@ -1157,6 +1197,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastCommandResult = ""
 		return m, nil
 
+	// AIコマンド結果の消去処理
+	case clearAiCmdResultMsg:
+		m.aiCmdResult = ""
+		return m, nil
+
 	case containerStatsMsg:
 		// コンテナ統計キャッシュを一括更新
 		for containerID, cache := range msg.Containers {
@@ -1222,19 +1267,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// AIコマンド実行結果の受信（修正箇所：デモフェーズの更新を追加）
+	// AIコマンド実行結果の受信
 	case cmdExecMsg:
 		m.aiCmdResult = msg.Result
 
-		// ▼▼▼ 修正: AIによる復旧コマンドが成功したら、デモフェーズを「復旧」へ移行する ▼▼▼
+		// AIによる復旧コマンドが成功したら、デモフェーズを「復旧」へ移行
 		if m.demoPhase == DemoPhaseBroken {
 			m.demoPhase = DemoPhaseFixed
-			m.message = "✅ System Recovered via AI Automation" // メッセージを復旧完了へ
+			m.message = "✅ System Recovered via AI Automation"
 		}
-		// ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-		// 実行後に最新の状態を反映するため、全サービス再取得をトリガー
-		return m, m.fetchAllServicesCmd()
+		// 結果表示を2秒後に消し、サービス状態を更新する
+		return m, tea.Batch(
+			m.fetchAllServicesCmd(),
+			tea.Batch(m.updateServiceStatusCmd()...),
+			// 【修正点2】待機時間を 5秒 -> 2秒 に短縮
+			tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+				return clearAiCmdResultMsg{}
+			}),
+		)
 
 	// ストリーミング開始の受信
 	case aiStreamStartMsg:
@@ -1340,32 +1391,33 @@ func (m Model) runAIAnalysisCmd() tea.Cmd {
 // executePendingCmd はコマンドを実行します（デモ用にモック化）
 func executePendingCmd(command string) tea.Cmd {
 	return func() tea.Msg {
-		// ▼▼▼ デモ用モック: 特定のコマンドを検知して「成功」を偽装 ▼▼▼
-		// AIが提案するコマンド "docker start postgres-db" が含まれていれば成功扱いにする
-		if strings.Contains(command, "postgres-db") || strings.Contains(command, "docker start") {
-			// リアル感を出すために少し待機 (800ms)
-			time.Sleep(800 * time.Millisecond)
+		// 【修正点1】どんなコマンドが来ても「安全に」モックとして扱う
+		// 条件分岐を削除し、常に成功したフリをする（または条件を緩める）
 
-			// 成功メッセージを返す
-			successOutput := "postgres-db\nRunning...\nCheck logs for details."
-			result := fmt.Sprintf("✓ 実行成功 (Demo):\n%s", successOutput)
+		// リアル感を出す待機
+		time.Sleep(800 * time.Millisecond)
 
-			return cmdExecMsg{Result: result}
-		}
-		// ▲▲▲ デモ用モックここまで ▲▲▲
-
-		// それ以外のコマンドは実際に実行
-		cmd := exec.Command("sh", "-c", command)
-		output, err := cmd.CombinedOutput()
-
-		result := ""
-		if err != nil {
-			result = fmt.Sprintf("✗ 実行エラー: %v\n%s", err, string(output))
-		} else {
-			result = fmt.Sprintf("✓ 実行成功:\n%s", string(output))
-		}
+		// 常にデモ用の成功メッセージを返す
+		// (AIが変なコマンドを出してもデモを止めないため)
+		successOutput := fmt.Sprintf("%s\nRunning...\n(Mock Execution for Demo)", command)
+		result := fmt.Sprintf("✓ 実行成功 (Demo):\n%s", successOutput)
 
 		return cmdExecMsg{Result: result}
+
+		// 【削除】危険な実実行コードは削除またはコメントアウト
+		/*
+			cmd := exec.Command("sh", "-c", command)
+			output, err := cmd.CombinedOutput()
+
+			result := ""
+			if err != nil {
+				result = fmt.Sprintf("✗ 実行エラー: %v\n%s", err, string(output))
+			} else {
+				result = fmt.Sprintf("✓ 実行成功:\n%s", string(output))
+			}
+
+			return cmdExecMsg{Result: result}
+		*/
 	}
 }
 
