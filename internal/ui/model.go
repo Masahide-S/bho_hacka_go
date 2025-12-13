@@ -485,12 +485,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.message = "Loading 3-Day History..."
 				return m, m.fetchGraphDataCmd(viewGraphHistory)
 			}
-			// 左パネルにいる場合はヒストリーグラフへ
-			if m.focusedPanel == "left" && !m.showConfirmDialog && !m.showLogView {
-				m.currentView = viewGraphHistory
-				m.message = "Loading 3-Day History..."
-				return m, m.fetchGraphDataCmd(viewGraphHistory)
-			}
 			// 右パネルにいる場合は左パネルへ戻る
 			if m.focusedPanel == "right" {
 				m.focusedPanel = "left"
